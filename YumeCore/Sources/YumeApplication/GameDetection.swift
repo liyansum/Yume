@@ -43,6 +43,9 @@ public struct DetectionSnapshot: Sendable, Equatable {
 
 public protocol GameDetector: Sendable {
     var descriptor: EngineDescriptor { get }
+    /// Whether an in-app runtime can actually host this engine today.
+    /// Detectors stay usable for identification even before a runtime ships.
+    var runtimeAvailable: Bool { get }
     func probe(_ snapshot: DetectionSnapshot) -> ProbeResult?
 }
 

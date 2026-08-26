@@ -137,7 +137,7 @@ EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 
 当前已实现 `GameID`、`ImportedGame`（含 `contentFingerprint`）、`EngineID`、`EngineDescriptor`、`ImportTaskID`、`ImportState`、`StorageRelativePath`、`StagingManifest`、`DetectionEvidence`、`ProbeResult`、`CompatibilityReport`、`GameManifest`、`StorageBudget`、`DiagnosticEntry` 与首版 `EngineEvent`/宿主骨架；其余条目仍是计划模型。
 
-检测协议已按“检测器与运行适配器分离”落地：`DetectionSnapshot` 提供大小写/分隔符归一化的只读文件清单，`DetectorRegistry.decide` 返回 `selected/ambiguous/noMatch`，`SignatureGameDetector` 用声明式规则（必需/佐证/阻断扩展名）产出证据与兼容报告。
+检测协议已按“检测器与运行适配器分离”落地：`DetectionSnapshot` 提供大小写/分隔符归一化的只读文件清单，`DetectorRegistry.decide` 返回 `selected/ambiguous/noMatch`，`SignatureGameDetector` 用声明式规则（必需/佐证/阻断扩展名）产出证据与兼容报告。运行时可用性由 `GameEngineCatalog` 从检测器的 `runtimeAvailable` 派生为 `detectionOnly/restrictedWeb/dedicatedRuntime` 三类宿主策略；新增引擎适配器时只需注册新检测器并在目录中声明宿主形态。
 
 宿主协议保持小而稳定，概念接口如下；实际签名可在首条纵向切片中校正：
 
@@ -198,7 +198,7 @@ picked
 → 创建唯一 EnginePlayer → running ↔ paused → stopping → released
 ```
 
-`PlaySessionCoordinator` 保证同一时间只有一个活跃游戏。停止必须释放渲染、纹理、音频、计时器、WebView/解释器状态和输入监听，再恢复系统音频及方向策略。锁屏、后台和音频中断默认暂停；首版不后台持续运行。
+`PlaySessionCoordinator` 保证同一时间只有一个活跃游戏：启动前依次校验游戏存在、兼容状态可运行、引擎在 `GameEngineCatalog` 中具备真实运行时（检测只读引擎在访问内容前即被拒绝），停止时返回会话归属的游戏 ID 供宿主记录最近游玩。停止必须释放渲染、纹理、音频、计时器、WebView/解释器状态和输入监听，再恢复系统音频及方向策略。锁屏、后台和音频中断默认暂停；首版不后台持续运行。
 
 ### 7.3 存档与离线导入导出
 
@@ -221,7 +221,7 @@ Application Support/Yume/
 └── Library.sqlite               # 计划；当前以目录扫描 + manifest 为真相来源
 ```
 
-当前 `LocalGameStorage` 已实现固定根目录创建、对 staging/缓存/诊断的选择性备份排除、iOS 文件保护、任务发现、manifest 原子写入、相对路径验证、符号链接拒绝和按强类型任务 ID 的幂等 staging 清理。它同时实现了 `Games/<game-id>` 的原子提交（含同卷移动、替换旧版时保留存档与身份）、`original/` 只读化及删除/清理前的可写恢复、按内容指纹的重复检测与分离存档（`DetachedSaves/`）重挂、存储占用明细与最近游玩标记。`GameContentLocation` 目前只对 MV/MZ/TyranoScript 三类 Web 引擎给出可运行内容根，并要求存在 `index.html`；其他引擎在运行时门禁解除前返回 `runtimeUnavailable`。资料库仍以目录扫描为真相来源，SQLite/SwiftData 索引与容量预算执行仍是计划能力。
+当前 `LocalGameStorage` 已实现固定根目录创建、对 staging/缓存/诊断的选择性备份排除、iOS 文件保护、任务发现、manifest 原子写入、相对路径验证、符号链接拒绝和按强类型任务 ID 的幂等 staging 清理。它同时实现了 `Games/<game-id>` 的原子提交（含同卷移动、替换旧版时保留存档与身份）、`original/` 只读化及删除/清理前的可写恢复、按内容指纹的重复检测与分离存档（`DetachedSaves/`）重挂、存储占用明细与最近游玩标记。`contentLocation` 只负责定位内容根并校验入口文件，不再内置引擎白名单；运行时可用性统一由 `GameEngineCatalog`（从检测注册表派生的宿主策略，唯一允许携带引擎 ID 策略的位置）与 actor `PlaySessionCoordinator`（独占会话 + 检测只读引擎拒绝启动）在 Application 层判定。资料库仍以目录扫描为真相来源，SQLite/SwiftData 索引与容量预算执行仍是计划能力。
 
 数据所有权规则：
 

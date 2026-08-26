@@ -44,6 +44,8 @@ final class AppModel {
     private let maintenance: any GameMaintenance
     private let saveTransfer: any GameSaveTransfer
     private let diagnostics: any DiagnosticStore
+    private let playSessions: PlaySessionCoordinator
+    let engineCatalog: GameEngineCatalog
     private var hasLoaded = false
     private var detectionContinuation: CheckedContinuation<ProbeResult?, Never>?
     private var duplicateContinuation: CheckedContinuation<DuplicateImportResolution, Never>?
@@ -68,7 +70,9 @@ final class AppModel {
         contentProvider: any GameContentProvider,
         maintenance: any GameMaintenance,
         saveTransfer: any GameSaveTransfer,
-        diagnostics: any DiagnosticStore
+        diagnostics: any DiagnosticStore,
+        playSessions: PlaySessionCoordinator,
+        engineCatalog: GameEngineCatalog
     ) {
         self.library = library
         self.importer = importer
@@ -76,6 +80,8 @@ final class AppModel {
         self.maintenance = maintenance
         self.saveTransfer = saveTransfer
         self.diagnostics = diagnostics
+        self.playSessions = playSessions
+        self.engineCatalog = engineCatalog
     }
 
     static func live() -> AppModel {
@@ -87,10 +93,17 @@ final class AppModel {
             baseURL: applicationSupport.appendingPathComponent("Yume", isDirectory: true)
         )
         let diagnostics = LocalDiagnosticStore(directoryURL: storage.layout.diagnostics)
+        let detectors = BuiltInGameDetectors.registry
+        let catalog = GameEngineCatalog(detectors: detectors.detectors)
         let importer = DirectoryGameImportService(
             storage: storage,
-            detectors: BuiltInGameDetectors.registry,
+            detectors: detectors,
             diagnostics: diagnostics
+        )
+        let playSessions = PlaySessionCoordinator(
+            library: storage,
+            contentProvider: storage,
+            catalog: catalog
         )
         return AppModel(
             library: storage,
@@ -98,7 +111,9 @@ final class AppModel {
             contentProvider: storage,
             maintenance: storage,
             saveTransfer: storage,
-            diagnostics: diagnostics
+            diagnostics: diagnostics,
+            playSessions: playSessions,
+            engineCatalog: catalog
         )
     }
 
@@ -270,7 +285,7 @@ final class AppModel {
     func launch(_ game: ImportedGame) async {
         playbackFailed = false
         do {
-            activeGame = try await contentProvider.contentLocation(for: game.id)
+            activeGame = try await playSessions.start(gameID: game.id)
         } catch {
             playbackFailed = true
         }
@@ -281,9 +296,9 @@ final class AppModel {
     }
 
     func stopPlaying(markAsPlayed: Bool = true) async {
-        let gameID = activeGame?.game.id
+        let stoppedGameID = await playSessions.stop()
         activeGame = nil
-        guard markAsPlayed, let gameID else { return }
+        guard markAsPlayed, let gameID = stoppedGameID else { return }
         try? await library.markPlayed(id: gameID, at: Date())
         await reloadLibrary()
     }

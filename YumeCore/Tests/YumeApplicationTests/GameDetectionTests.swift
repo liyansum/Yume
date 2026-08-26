@@ -59,8 +59,9 @@ private struct FixtureDetector: GameDetector {
     let descriptor: EngineDescriptor
     let confidence: Int
     let marker: String
+    let runtimeAvailable: Bool
 
-    init(id: String, confidence: Int, marker: String) {
+    init(id: String, confidence: Int, marker: String, runtimeAvailable: Bool = false) {
         self.descriptor = EngineDescriptor(
             id: EngineID(rawValue: id),
             displayName: id,
@@ -68,6 +69,7 @@ private struct FixtureDetector: GameDetector {
         )
         self.confidence = confidence
         self.marker = marker
+        self.runtimeAvailable = runtimeAvailable
     }
 
     func probe(_ snapshot: DetectionSnapshot) -> ProbeResult? {

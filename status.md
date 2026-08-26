@@ -1,67 +1,57 @@
 # Yume 当前任务状态
 
-> 当前任务：实现目录/ZIP 导入纵向切片（安全解包、检测、原子提交、资料库维护、存档迁移、受限 Web 播放器）
+> 当前任务：建立多引擎宿主层（引擎目录 GameEngineCatalog + 独占会话 PlaySessionCoordinator），移除引擎硬编码白名单
 > 状态：已完成（静态验证通过，待 Swift 6/macOS 编译复核）
 > 最后更新：2026-08-26
 
 ## 目标
 
-- 把既有导入协调器接到真实源：目录复制与顶层 ZIP 安全解包，含动态空间预算与失败清理。
-- 实现检测证据模型、确定性签名检测注册表与歧义/冲突结果，并接入 App UI 决策。
-- 实现 `Games/<game-id>` 原子提交、重复游戏处理（取消/保留两份/替换保留存档）、删除策略与分离存档重挂。
-- 提供存档离线导出/导入包、存储占用明细与最近游玩标记。
-- 为 MV/MZ/TyranoScript 类 Web 游戏提供受限 WKWebView 播放器原型（断网、自定义 scheme 资源服务、localStorage 桥）。
+- 让“哪个引擎能被真正运行”成为单一来源策略，而不是散落在存储层和 UI 的硬编码。
+- 为逐个接入引擎适配器提供统一挂点：检测器声明 `runtimeAvailable`，目录派生宿主形态。
+- 保证同一时间只有一个活跃游戏会话，且检测只读引擎在触碰内容前即被拒绝。
 
 ## 已完成
 
-- `CYumeZlib` C 目标：ZIP 条目流式解压（store/deflate）、CRC32 校验、大小不符即失败；经系统 zlib 链接，zlib 许可符合 ADR 边界。
-- `SafeZIPExtractor`：纯 Swift 中央目录解析 + C 解压；拒绝路径逃逸、反斜杠/非 UTF-8 文件名、符号链接条目、加密条目、多卷、重复路径（大小写折叠）、超限条目数/路径长度/展开体积/压缩比；支持 ZIP64；解压失败整体回滚。
-- 内置检测器：Ren'Py、RGSS1–3、MV/MZ（含 www 包装）、ONS、Kirikiri/XP3、Flash、TyranoScript 的声明式签名规则；`.dll/.pyd/.node/.tpm` 等原生组件一律阻断为 unsupported；`runtimeAvailable=false` 时同样阻断。
-- `DirectoryGameImportService`：完整事务编排（验证 → 预算 → staging → 指纹查重 → 多根检测 → 歧义/重复回调裁决 → 兼容扫描 → 原子提交），错误码写入诊断日志，失败按 manifest 终态清理。
-- `LocalGameStorage` 扩展：目录/ZIP 源校验与预算、staging 复制/解压、检测快照（深度 ≤4 的候选根枚举）、内容指纹（SHA-256 自研实现，路径+大小+字节流）、`Games/` 原子提交与替换（旧版移入任务内 backup，失败回滚）、`original/` 只读化及删除前可写恢复、`DetachedSaves/` 分离存档与指纹重挂、`.yumesave` 存档导出/导入（版本/游戏/引擎校验、限额、临时区原子替换）、存储明细、最近游玩标记。
-- App 层：`AppModel.live()` 组合根；导入进度覆盖层、检测歧义 Sheet、重复游戏确认、成功/部分成功/失败通知；游戏详情页（启动、兼容报告、存档导出/分享/导入、按占用明细的删除流程）；设置页新增存储、控制、兼容性、诊断（本地日志查看与脱敏导出）、许可、隐私入口；四语言本地化同步补齐（142 键一致）。
-- `GamePlayerView`：受限 WKWebView——`yume-game://` 自定义 scheme 只读资源服务（路径规范化、符号链接拒绝、Range 支持）、WKContentRuleList 全量断网、导航白名单、localStorage 桥（大小限额、按游戏 JSON 持久化）、虚拟方向键/确认/取消与触感反馈开关。
-- 测试：检测注册表、内置检测器、SHA-256 已知向量、本地诊断往返、SafeZIP 解析/逃逸/加密/CRC 回滚、目录导入集成（原子入库、原生插件阻断关闭、大小写冲突、重复三选、替换保身份保存档、分离存档重挂、存档往返）；测试总数增至 40 个方法。
-- 修复本切片内发现的缺陷：只读 `original/` 会使后续删除/staging 清理触发 EACCES，已在 `removeGame`、`discardStagingTask` 和替换备份清理前恢复可写权限。
+- `GameDetector` 协议新增 `runtimeAvailable` 要求；`SignatureGameDetector` 原有同名存储属性直接满足，测试替身同步补齐。
+- 新增 `EngineHostingKind`（detectionOnly / restrictedWeb / dedicatedRuntime）、`GameEngineCatalogEntry`、`GameEngineCatalog`：从检测器列表派生每个引擎的宿主形态；`restrictedWebEngines` 静态集合是全仓库唯一携带 Web 引擎 ID 策略的位置；未知引擎默认 detectionOnly（失败关闭）。
+- 新增 actor `PlaySessionCoordinator`：启动前依次校验游戏存在 → 兼容状态可运行 → 目录判定可宿主 → 内容定位成功后才占用独占槽位；同游戏重复启动幂等；`stop()` 返回会话归属游戏 ID 并释放槽位。
+- `LocalGameStorage.contentLocation` 移除内置的 MV/MZ/TyranoScript 白名单，只负责内容根定位、www 包装下钻与入口文件存在性校验；运行时可用性判断完全上移到 Application 层。
+- `AppModel` 组合根接入目录与会话协调器：启动走 `playSessions.start(gameID:)`，退出走 `stop()` 后再记录最近游玩；`engineCatalog` 暴露给设置页。
+- 设置页“兼容性”改为由 `GameEngineCatalog.entries` 驱动（名称、兼容带、宿主状态图标），删除手工维护的八元组数组；新增 dedicatedRuntime 状态展示与四语言文案。
+- 测试：新增目录派生（Web/独立运行时/仅识别三类 + 未知引擎默认值）、独占会话（双游戏互斥、同游戏幂等重启、stop 释放）、仅识别引擎拒绝且不触碰内容、缺失/不可运行游戏拒绝等用例；测试总数增至 48 个方法。
 
 ## 当前变更文件
 
-- `YumeCore/Package.swift`
-- `YumeCore/Sources/CYumeZlib/`（新增）
-- `YumeCore/Sources/YumeDomain/DetectionModels.swift`、`StorageBudget.swift`、`GameModels.swift`
-- `YumeCore/Sources/YumeApplication/GameDetection.swift`、`GameImportService.swift`、`Diagnostics.swift`、`GameContentProvider.swift`、`GameSaveTransfer.swift`、`GameLibrary.swift`
-- `YumeCore/Sources/YumeInfrastructure/SafeZIPExtractor.swift`、`BuiltInGameDetectors.swift`、`LocalDiagnosticStore.swift`、`SHA256Hasher.swift`、`LocalGameStorage.swift`、`InMemoryGameLibrary.swift`
-- `YumeCore/Tests/YumeApplicationTests/GameDetectionTests.swift`、`ImportCoordinatorTests.swift`
-- `YumeCore/Tests/YumeInfrastructureTests/BuiltInGameDetectorsTests.swift`、`DirectoryGameImportIntegrationTests.swift`、`LocalDiagnosticStoreTests.swift`、`SHA256HasherTests.swift`、`SafeZIPExtractorTests.swift`、`LocalGameStorageTests.swift`
-- `YumeApp/App/AppModel.swift`、`RootView.swift`、`YumeApp.swift`
-- `YumeApp/Features/Library/LibraryView.swift`、`GameDetailView.swift`（新增）、`GameItemViews.swift`
-- `YumeApp/Features/Player/GamePlayerView.swift`（新增）
+- `YumeCore/Sources/YumeApplication/GameDetection.swift`
+- `YumeCore/Sources/YumeApplication/GameEngineCatalog.swift`（新增）
+- `YumeCore/Sources/YumeApplication/PlaySessionCoordinator.swift`（新增）
+- `YumeCore/Sources/YumeInfrastructure/LocalGameStorage.swift`
+- `YumeApp/App/AppModel.swift`
 - `YumeApp/Features/Settings/SettingsView.swift`
 - `YumeApp/Resources/{en,ja,zh-Hans,zh-Hant}.lproj/Localizable.strings`
+- `YumeCore/Tests/YumeApplicationTests/GameDetectionTests.swift`
+- `YumeCore/Tests/YumeApplicationTests/PlaySessionCoordinatorTests.swift`（新增）
 - `ARCHITECTURE.md`、`progress.md`、`status.md`
 
 ## 关键判断
 
-- 加密 ZIP 首版直接拒绝而非提示输密码：密码算法组件尚未过 ADR/审计门禁，先保证“明确不支持”优于半支持。
-- 归档文件名仅接受 UTF-8（或纯 ASCII）：CP437/Shift-JIS 文件名留待编码识别门禁，避免静默乱码路径入库。
-- 重复游戏以“引擎 + 内容指纹”为准；替换沿用原游戏 ID 与存档，keepBoth 允许同指纹两份。
-- 删除游戏默认把非空存档迁入 `DetachedSaves/<game-id>/` 并记录来源 manifest；同指纹同引擎再导入时自动重挂并清除分离副本。
-- Web 引擎运行时边界：MV/MZ/TyranoScript 标记 `runtimeAvailable=true` 仅代表存在受限 WKWebView 宿主，不表示任何具体游戏已验证；其余引擎在适配器落地前保持 detection-only。
-- 播放器断网采用双层防护（content rule list 阻断 http/https/ws/file + 导航代理 scheme 白名单），资源只经 `yume-game://` 提供。
-- `original/` 只读化属于纵深防御而非安全边界；所有删除/清理路径先恢复写权限再递归删除，避免残留半删树。
+- 宿主策略集中在 `GameEngineCatalog`：存储层不再知道“哪些引擎能跑”，未来接入 ONS/Kirikiri/Ren'Py 适配器时只需注册检测器并更新目录，UI 与存储零改动。
+- 会话协调器把“游戏存在/可运行/可宿主”三道校验全部前置到内容访问之前；仅识别引擎连文件系统都不会触碰。
+- `contentLocation` 保持纯定位语义（含 index.html 入口校验），为未来非 Web 引擎返回不同入口类型留出空间；当前非 Web 游戏会在协调器层先被拦截。
+- 排期调整记录：负责人指示夹具制作放在 App 全部内容之后、规则 4.7 与品牌/法律复核放在所有引擎实现之后；已写入 `progress.md`，`Agents.md` 未改动，发布类门禁仍以 `Agents.md` 为准。
 
 ## 验证结果
 
 - `git diff --check` 通过；全部 Swift 文件花括号/圆括号结构检查通过（含三引号字符串）。
-- 四语言 Localizable.strings 键集完全一致（各 142 键），Swift 中引用的本地化键无缺失；SF Symbol 与 AppStorage 键不计入。
-- ZIP 测试夹具数据用系统 zlib 独立复核：deflate 字节流与 CRC32（`0x7ede44ee`、`0x3610a686`）逐位一致。
-- 敏感凭据模式扫描未发现命中；async 调用未放入 XCTest 同步 autoclosure。
-- 当前 Linux 环境没有 Swift/Xcode 工具链，因此未实际运行 `swift test` 或 iOS 构建；上述结果不能视为编译通过。Xcode 工程使用 fileSystemSynchronized 组，新文件无需改 pbxproj。
+- 四语言 Localizable.strings 键集完全一致（各 143 键），新增 `compatibility.runtime.dedicated` 四语齐备。
+- async 调用未放入 XCTest 同步 autoclosure；@Sendable 闭包不捕获可变局部变量（计数器改用 actor）。
+- 敏感凭据模式扫描未发现命中。
+- 当前 Linux 环境没有 Swift/Xcode 工具链，未实际运行 `swift test` 或 iOS 构建；上述结果不能视为编译通过。
 
 ## 阻塞
 
-- 编译与运行验证仍需要 Swift 6/macOS Xcode 环境；接入更多平台无关能力不受阻，但真机行为（WebView 断网、触控、性能）无法在本环境验证。
+- 编译与运行验证仍需要 Swift 6/macOS Xcode 环境；平台无关的多引擎基础设施开发不受阻。
 
 ## 唯一下一步
 
-在 Swift 6/macOS 环境运行全部核心测试与 iPhone/iPad 构建复核，修正编译/并发问题；随后开始制作完全自有的最小合法测试夹具（先 MV/MZ），并起草 Apple 规则 4.7 预沟通材料。
+继续多引擎核心：定义首个非 Web 引擎适配器骨架（建议 ONScripter 或 Kirikiri 的探测/准备契约），或先在 Swift 6/macOS 环境完成编译与测试复核后继续。

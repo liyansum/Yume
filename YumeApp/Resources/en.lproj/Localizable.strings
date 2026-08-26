@@ -107,6 +107,7 @@
 "controls.orientation.portrait" = "Portrait";
 "compatibility.runtime.available" = "Runtime installed";
 "compatibility.runtime.detectionOnly" = "Detection only";
+"compatibility.runtime.dedicated" = "Dedicated runtime";
 "compatibility.runtime.message" = "Only engines marked with a check can currently start. Detection-only engines fail closed and do not execute game code.";
 "diagnostics.library.title" = "Local State";
 "diagnostics.library.loaded" = "Library readable";

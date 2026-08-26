@@ -1,4 +1,5 @@
 import SwiftUI
+import YumeApplication
 import YumeDomain
 
 struct SettingsView: View {
@@ -20,7 +21,7 @@ struct SettingsView: View {
                 }
 
                 NavigationLink {
-                    CompatibilitySettingsView()
+                    CompatibilitySettingsView(catalog: model.engineCatalog)
                 } label: {
                     Label("settings.compatibility", systemImage: "checkmark.seal")
                 }
@@ -116,35 +117,28 @@ private struct ControlSettingsView: View {
 }
 
 private struct CompatibilitySettingsView: View {
-    private let engines: [(name: String, runtime: String, available: Bool)] = [
-        ("RPG Maker MV", "MV", true),
-        ("RPG Maker MZ", "MZ", true),
-        ("TyranoScript", "v4–v5", true),
-        ("Ren'Py", "7.x–8.x", false),
-        ("RPG Maker XP / VX / VX Ace", "RGSS1–3", false),
-        ("ONScripter / NScripter", "validated script band", false),
-        ("Kirikiri / XP3", "Kirikiri 2 / Z", false),
-        ("Flash", "AVM1 / AVM2", false)
-    ]
+    let catalog: GameEngineCatalog
 
     var body: some View {
         List {
-            ForEach(engines, id: \.name) { engine in
+            ForEach(catalog.entries) { entry in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(engine.name)
-                        Text(engine.runtime)
+                        Text(entry.descriptor.displayName)
+                        Text(entry.descriptor.compatibilityVersion)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
                     Label(
-                        engine.available ? "compatibility.runtime.available" : "compatibility.runtime.detectionOnly",
-                        systemImage: engine.available ? "checkmark.circle.fill" : "magnifyingglass.circle"
+                        entry.hostingKind.localizedKey,
+                        systemImage: entry.hostingKind.symbolName
                     )
                     .labelStyle(.iconOnly)
-                    .foregroundStyle(engine.available ? .green : .orange)
+                    .foregroundStyle(entry.hostingKind.tint)
+                    .accessibilityLabel(Text(entry.hostingKind.localizedKey))
                 }
+                .accessibilityElement(children: .combine)
             }
 
             Section {
@@ -254,5 +248,31 @@ private struct AboutView: View {
         }
         .navigationTitle("settings.about")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private extension EngineHostingKind {
+    var localizedKey: LocalizedStringKey {
+        switch self {
+        case .restrictedWeb: "compatibility.runtime.available"
+        case .dedicatedRuntime: "compatibility.runtime.dedicated"
+        case .detectionOnly: "compatibility.runtime.detectionOnly"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .restrictedWeb: "checkmark.circle.fill"
+        case .dedicatedRuntime: "shippingbox.circle.fill"
+        case .detectionOnly: "magnifyingglass.circle"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .restrictedWeb: .green
+        case .dedicatedRuntime: .blue
+        case .detectionOnly: .orange
+        }
     }
 }

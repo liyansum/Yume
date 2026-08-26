@@ -107,6 +107,7 @@
 "controls.orientation.portrait" = "直向";
 "compatibility.runtime.available" = "已安裝執行階段";
 "compatibility.runtime.detectionOnly" = "僅識別";
+"compatibility.runtime.dedicated" = "獨立執行階段";
 "compatibility.runtime.message" = "目前只有帶勾標記的引擎可以啟動。僅識別引擎會安全拒絕執行，不會執行遊戲程式碼。";
 "diagnostics.library.title" = "本機狀態";
 "diagnostics.library.loaded" = "遊戲庫可讀取";

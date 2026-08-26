@@ -490,10 +490,6 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             throw GameContentError.gameNotFound
         }
         let manifest = try loadGameManifest(at: gameRoot)
-        let supportedWebEngines: Set<String> = ["rpg-maker-mv", "rpg-maker-mz", "tyranoscript"]
-        guard supportedWebEngines.contains(manifest.game.engine.id.rawValue) else {
-            throw GameContentError.runtimeUnavailable(manifest.game.engine.id)
-        }
 
         var contentRoot = gameRoot.appendingPathComponent(
             manifest.contentRoot.rawValue,

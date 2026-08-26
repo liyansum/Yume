@@ -107,6 +107,7 @@
 "controls.orientation.portrait" = "竖屏";
 "compatibility.runtime.available" = "已安装运行时";
 "compatibility.runtime.detectionOnly" = "仅识别";
+"compatibility.runtime.dedicated" = "独立运行时";
 "compatibility.runtime.message" = "目前只有带勾标记的引擎可以启动。仅识别引擎会安全拒绝运行，不会执行游戏代码。";
 "diagnostics.library.title" = "本地状态";
 "diagnostics.library.loaded" = "游戏库可读取";
