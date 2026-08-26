@@ -56,6 +56,8 @@ Yume 是面向 iPhone 与 iPad 的本地多引擎游戏兼容运行器。首版�
 
 **已确认（2026-08-26）：** 为支持商业分发，Yume 选择放弃 GPL 组件并独立实现相关兼容能力；不下载或动态加载新引擎、解释器、原生插件、framework、dylib 或 DLL。完整边界与影响见 ADR-0001（见第 13 节）。
 
+> **2026-08-26 更新：** 负责人已改选原三路径中的第一项——整体 GPL 化并引入既有实现，同时放弃 App Store/TestFlight 分发。本节及 ADR-0001 的"放弃 GPL"结论由 **ADR-0053** 取代；静态编译、禁 JIT、禁运行时下载的边界继续有效。
+
 Yume 自有代码采用闭源商业分发；这不减少第三方许可证、NOTICE、署名、源码提供或其他合法义务。商业发布前必须完成专业法律复核。
 
 允许使用经过许可证审计的 Apple 系统框架，以及 MIT、BSD、Apache-2.0、zlib 等宽松许可证组件；所有系统外依赖仍须在引入前完成 ADR、SBOM 和传递依赖审计。首版统一排除 LGPL、AGPL、MPL、EPL 及其他存在 copyleft、文件级公开、替换/重新链接或类似传递义务的组件。
@@ -1729,3 +1731,36 @@ ZIP/7z 成功解包、验证并原子提交后，删除 Yume staging 中的源�
 - libarchive `COPYING`：https://github.com/libarchive/libarchive/blob/master/COPYING
 - libarchive RAR reader：https://github.com/libarchive/libarchive/blob/master/libarchive/archive_read_support_format_rar.c
 - libarchive RAR5 reader：https://github.com/libarchive/libarchive/blob/master/libarchive/archive_read_support_format_rar5.c
+
+<!-- 决策记录：2026-08-26 负责人口头确认，由代理代为落档 -->
+
+### ADR-0053：放弃 App Store 分发，整体 GPL 化并引入既有引擎实现与用户自带 RTP
+
+- 状态：已确认（负责人 2026-08-26 书面选择）
+- 决策人：产品负责人
+- 取代关系：本 ADR 取代 ADR-0001（放弃 GPL 组件）、ADR-0002（一次性买断商业模式的闭源前提）中与之冲突的部分；ADR-0030 中"不引用 mkxp-z"的限制解除；ADR-0019/0015 等离线与数据边界不受影响。
+
+#### 背景
+
+RGSS 游戏普遍依赖 RTP 标准素材。原路线（独立实现 + 只运行资源完整游戏 + App Store 闭源首发）意味着 RTP 缺失游戏永远无法运行。负责人在被告知全部后果后选择改走 GPL 开源路线，以换取直接复用既有成熟实现（如 mkxp-z、ONScripter），并为"用户自带 RTP 本地映射"扫清产品边界。
+
+#### 决策
+
+1. Yume 自有代码改为 GPL 许可分发；因 ONScripter 为 GPL-2.0-only，自有代码采用 GPL-2.0-or-later 以保证组合程序可依 GPL-2.0 条款整体发布。
+2. 放弃 App Store 与 TestFlight 上架目标（GPL 与 Apple ToS 不兼容）。分发改走：GitHub 公开完整对应源码 + 用户自建签名安装、社区侧载渠道、欧盟备用市场（逐家核对其条款兼容性后再接入）。
+3. 允许引入 GPL 及其他许可证的既有引擎实现，逐项完成 ADR、固定版本/commit、SBOM 与安全审计后方可合入：
+   - RGSS：mkxp-z（GPL-2.0-or-later）
+   - ONScripter：ONScripter 官方实现（GPL-2.0）
+   - Kirikiri：krkrsdl2（核心 MIT，依赖逐项审计）
+   - Flash：Ruffle（Apache-2.0 OR MIT；使用其非 JIT 解释模式）
+   - Ren'Py：评估直接集成 Ren'Py 官方运行时栈（主许可宽松但捆绑组件复杂，须先完成完整 SBOM 审计）
+4. iOS 平台硬约束不变：禁止 JIT、动态加载与下载执行代码；上述所选实现均为解释器模式，符合约束；一切仍静态编入单一 App 二进制。
+5. RTP 边界修改：Yume 仍不内置、不分发、不下载 RTP；新增"用户导入自己合法持有的 RTP 到本地容器，按引擎/游戏映射"能力。映射规则写入 manifest 并可在诊断中查看。
+6. 商业模式暂停：买断制随闭源路线一并中止；后续是否接受赞助/付费自建服务由负责人另行决定，不在本 ADR 范围内。
+7. 合规义务不减少：保留第三方许可页、署名、完整对应源码公开（含构建脚本）、书面源码提供方式；发布前仍需专业法律复核（重点变为 GPL 合规与商标）。
+
+#### 后果
+
+- 原"App Store 首发""外部 TestFlight"里程碑作废，替换为"开源合规发布"门槛：SBOM 完整、全源码可复现构建、许可页齐全、法律复核通过。
+- 引擎开发策略从"逐项独立实现（夹具先行）"转为"逐项上游集成（审计先行）"：每引入一个上游实现，先冻结 commit、审计许可证与传递依赖、验证 iOS 真机性能，再进入兼容矩阵阶段。
+- 夹具要求不变：任何引擎宣称支持前仍需合法测试集验证核心流程与存档往返。

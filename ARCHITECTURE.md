@@ -241,18 +241,19 @@ Application Support/Yume/
 
 ## 9. 引擎接入策略
 
-| 适配器 | 运行路径 | 首版边界 |
-| --- | --- | --- |
-| RenPyLegacy | 静态 Python 2 兼容运行时与受限宿主 | 7.x；不支持 6.x、原生 Python 扩展 |
-| RenPyModern | 静态 Python 3 兼容运行时与受限宿主 | 8.x；精确小版本由夹具矩阵决定 |
-| RGSS | 独立 RGSS1/2/3 与 Ruby 语义兼容层 | XP/VX/VX Ace；资源须完整；Win32API 仅静态白名单 shim |
-| RMMV/RMMZ | `WKWebView`、只读本地资源映射和窄原生桥 | 纯 JS 插件、受限 CommonJS/NW.js/Node shim；无真实 Node/NW.js/原生插件 |
-| ONS | 独立脚本、资源和文本兼容层 | 标准 `txt`/`dat` 与经验证 NSA/SAR/NS2/NS3；无 `nt2`/`nt3` |
-| Kirikiri | 独立 TJS/KAG 与标准 XP3 兼容层 | Kirikiri 2/Z；无自定义加密、过滤器、`.tpm`/原生插件 |
-| Flash | 独立 SWF 解析、AVM1/AVM2 解释与渲染层 | AS1/2/3、FWS/CWS/ZWS；无 JIT、Stage3D、AIR/ANE、DRM、网络/隐私硬件 |
-| TyranoScript | `WKWebView` 与受限 Tyrano/KAG/JS shim | 浏览器导出 v4/v5；无 Electron/NW.js/Node 原生能力 |
+> 2026-08-26 起（ADR-0053）：RGSS/ONS/Kirikiri/Flash/Ren'Py 从"独立实现"改为"集成既有上游运行时"，整体按 GPL-2.0-or-later 开源，放弃 App Store 分发。下表"上游基座"列为已确认候选；每个合入前须完成选型 ADR、固定 commit、SBOM 与 iOS 真机验证。
 
-每个适配器拥有自己的 descriptor、检测证据、兼容矩阵、资源预算、错误映射、夹具和回归测试。共享层不得出现按商业游戏名称匹配的补丁。
+| 适配器 | 上游基座 | 首版边界 |
+| --- | --- | --- |
+| RenPyLegacy / RenPyModern | 评估直接集成 Ren'Py 官方运行时栈（捆绑组件须先完整审计） | 7.x legacy + 8.x modern；精确小版本由夹具矩阵决定 |
+| RGSS | mkxp-z（GPL-2.0-or-later），静态编入 | XP/VX/VX Ace；RTP 由用户本地导入映射，Yume 不分发 |
+| RMMV/RMMZ | 系统 `WKWebView`、只读本地资源映射和窄原生桥（不变） | 纯 JS 插件、受限 CommonJS shim；无真实 Node/原生插件 |
+| ONS | ONScripter 官方实现（GPL-2.0）静态编入 | 标准 `txt`/`dat` 与经验证 NSA/SAR/NS2/NS3；无 `nt2`/`nt3` |
+| Kirikiri | krkrsdl2（核心 MIT）静态编入 | Kirikiri 2/Z；无自定义加密、过滤器、原生插件 |
+| Flash | Ruffle（Apache-2.0 OR MIT）非 JIT 解释模式 | AS1/2/3、FWS/CWS/ZWS；无 Stage3D/DRM/网络/隐私硬件 |
+| TyranoScript | `WKWebView` 与受限 Tyrano/KAG/JS shim（不变） | 浏览器导出 v4/v5；无 Electron/NW.js/Node 原生能力 |
+
+每个适配器仍拥有 descriptor、检测证据、兼容矩阵、资源预算、错误映射、夹具和回归测试；共享层不得出现按商业游戏名称匹配的补丁。所有上游均为解释器实现，满足 iOS 禁 JIT/禁动态加载约束；全部静态编入单一二进制并随源码公开构建脚本。
 
 ## 10. 并发与生命周期
 
