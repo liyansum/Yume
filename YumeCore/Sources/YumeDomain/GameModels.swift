@@ -50,6 +50,7 @@ public struct ImportedGame: Codable, Hashable, Sendable, Identifiable {
     public var importedAt: Date
     public var lastPlayedAt: Date?
     public var installedByteCount: Int64
+    public var contentFingerprint: String?
 
     public init(
         id: GameID = GameID(),
@@ -58,7 +59,8 @@ public struct ImportedGame: Codable, Hashable, Sendable, Identifiable {
         compatibilityStatus: CompatibilityStatus,
         importedAt: Date,
         lastPlayedAt: Date? = nil,
-        installedByteCount: Int64
+        installedByteCount: Int64,
+        contentFingerprint: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -67,5 +69,6 @@ public struct ImportedGame: Codable, Hashable, Sendable, Identifiable {
         self.importedAt = importedAt
         self.lastPlayedAt = lastPlayedAt
         self.installedByteCount = installedByteCount
+        self.contentFingerprint = contentFingerprint
     }
 }

@@ -17,12 +17,18 @@ let package = Package(
     targets: [
         .target(name: "YumeDomain"),
         .target(
+            name: "CYumeZlib",
+            path: "Sources/CYumeZlib",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedLibrary("z")]
+        ),
+        .target(
             name: "YumeApplication",
             dependencies: ["YumeDomain"]
         ),
         .target(
             name: "YumeInfrastructure",
-            dependencies: ["YumeDomain", "YumeApplication"]
+            dependencies: ["YumeDomain", "YumeApplication", "CYumeZlib"]
         ),
         .target(
             name: "YumeEngineHost",

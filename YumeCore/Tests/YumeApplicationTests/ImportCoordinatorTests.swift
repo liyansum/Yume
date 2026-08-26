@@ -148,6 +148,8 @@ final class ImportCoordinatorTests: XCTestCase {
     }
 }
 
+extension ImportCoordinatorTests: @unchecked Sendable {}
+
 private actor FakeImportStagingStorage: ImportStagingStorage {
     enum FakeError: Error, Sendable {
         case unreadable

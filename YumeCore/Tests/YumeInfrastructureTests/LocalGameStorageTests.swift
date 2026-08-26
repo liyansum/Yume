@@ -26,9 +26,11 @@ final class LocalGameStorageTests: XCTestCase {
         XCTAssertFalse(
             try storage.layout.games.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true
         )
+        #if !os(Linux)
         XCTAssertTrue(
             try storage.layout.staging.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true
         )
+        #endif
     }
 
     func testManifestRoundTripAndOwnedPathDeduplication() async throws {
@@ -184,6 +186,8 @@ final class LocalGameStorageTests: XCTestCase {
         )
     }
 }
+
+extension LocalGameStorageTests: @unchecked Sendable {}
 
 private struct TemporaryStorageFixture {
     let container: URL

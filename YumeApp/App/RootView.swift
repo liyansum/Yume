@@ -1,4 +1,5 @@
 import SwiftUI
+import YumeApplication
 
 struct RootView: View {
     enum Section: String, CaseIterable, Hashable, Identifiable {
@@ -38,6 +39,18 @@ struct RootView: View {
         .task {
             await model.loadLibraryIfNeeded()
         }
+        .fullScreenCover(item: activeGameBinding) { location in
+            GamePlayerView(location: location) {
+                Task { await model.stopPlaying() }
+            }
+        }
+        .alert("player.error.title", isPresented: playbackFailureBinding) {
+            Button("common.ok", role: .cancel) {
+                model.dismissPlaybackFailure()
+            }
+        } message: {
+            Text("player.error.message")
+        }
     }
 
     private var compactLayout: some View {
@@ -50,7 +63,7 @@ struct RootView: View {
             }
 
             NavigationStack {
-                SettingsView()
+                SettingsView(model: model)
             }
             .tabItem {
                 Label(Section.settings.titleKey, systemImage: Section.settings.symbolName)
@@ -71,9 +84,27 @@ struct RootView: View {
                 case .library:
                     LibraryView(model: model)
                 case .settings:
-                    SettingsView()
+                    SettingsView(model: model)
                 }
             }
         }
+    }
+
+    private var activeGameBinding: Binding<GameContentLocation?> {
+        Binding(
+            get: { model.activeGame },
+            set: { newValue in
+                if newValue == nil, model.activeGame != nil {
+                    Task { await model.stopPlaying() }
+                }
+            }
+        )
+    }
+
+    private var playbackFailureBinding: Binding<Bool> {
+        Binding(
+            get: { model.playbackFailed },
+            set: { if !$0 { model.dismissPlaybackFailure() } }
+        )
     }
 }

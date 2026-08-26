@@ -2,7 +2,7 @@
 
 > 文档状态：开发架构基线
 > 最后更新：2026-08-26  
-> 当前实现状态：首个 SwiftUI 宿主骨架与核心模块已落地；存储、完整导入、诊断、播放器和引擎适配器仍是计划能力
+> 当前实现状态：SwiftUI 宿主、目录/ZIP 导入管线（安全解包、检测、原子提交、重复处理）、资料库持久化与维护、存档离线迁移、本地诊断和受限 Web 播放器已有开发版实现；7z、转换管线、索引数据库与各引擎运行时适配器仍是计划能力
 > 约束优先级：若本文与 `Agents.md` 冲突，以 `Agents.md` 为准
 
 ## 1. 新会话快速入口
@@ -81,32 +81,33 @@ Yume 是最低支持 iOS/iPadOS 18 的完全离线、本地多引擎游戏兼容
 
 当前工程采用一个 iOS App target 加仓库内本地 Swift Package。真实入口如下：
 
-- [`Yume.xcodeproj`](Yume.xcodeproj)：iOS/iPadOS 18+ App 工程与共享 Scheme。
+- [`Yume.xcodeproj`](Yume.xcodeproj)：iOS/iPadOS 18+ App 工程与共享 Scheme（Swift 6 + 完全并发检查）。
 - [`YumeApp/App`](YumeApp/App)：App 入口、依赖组合和 iPhone/iPad 自适应根导航。
-- [`YumeApp/Features`](YumeApp/Features)：已落地资料库与设置界面；Import、Player、Diagnostics 待后续切片创建。
+- [`YumeApp/Features`](YumeApp/Features)：已落地资料库（含导入进度、检测歧义与重复游戏处理）、游戏详情（存档迁移、删除策略）与设置（存储、控制、兼容性、诊断、许可、隐私、关于）；播放器见 `Features/Player`。
 - [`YumeApp/Resources`](YumeApp/Resources)：自有颜色资源及简体中文、繁体中文、英语、日语本地化。
-- [`YumeCore`](YumeCore)：本地 Swift Package；当前提供 `YumeDomain`、`YumeApplication`、`YumeInfrastructure`、`YumeEngineHost` 四个静态模块及核心单元测试。
+- [`YumeCore`](YumeCore)：本地 Swift Package；提供 `CYumeZlib`（自研 zlib 封装的 C 目标，链接系统 zlib）与 `YumeDomain`、`YumeApplication`、`YumeInfrastructure`、`YumeEngineHost` 四个静态模块及核心单元测试。
 
 当前代码布局与后续目标如下；标注“计划”的目录尚不存在：
 
 ```text
 Yume.xcodeproj/
 YumeApp/
-├── App/                         # App 入口、组合根、自适应导航
+├── App/                         # 已实现：入口、组合根（AppModel.live()）、自适应导航
 ├── Features/
-│   ├── Library/                 # 已实现：空状态、搜索、排序、网格/列表、文件选择入口
-│   ├── Settings/                # 已实现：设置导航与关于/法律基础文案
-│   ├── Import/                  # 计划：任务进度、确认与错误恢复
-│   ├── Player/                  # 计划：渲染容器及输入覆盖层
-│   └── Diagnostics/             # 计划：开发版详细诊断 / Release 普通诊断
+│   ├── Library/                 # 已实现：网格/列表、搜索排序、详情、删除、存档迁移
+│   │                            # 已实现：文件选择导入入口与导入覆盖层（Import 未单独建目录）
+│   ├── Settings/                # 已实现：设置导航与关于/法律基础文案、诊断页
+│   ├── Player/                  # 已实现：受限 WKWebView 播放器、虚拟控制、本地存储桥
+│   └── Diagnostics/             # 计划：开发版详细诊断独立页（当前并入 Settings）
 └── Resources/                   # 本地化和权利清楚的 App 自有资源
 YumeCore/
 ├── Sources/
-│   ├── YumeDomain/              # 已实现首批游戏、引擎、导入状态、staging manifest 值类型
-│   ├── YumeApplication/         # 已实现资料库查询、导入协调器与 staging 存储协议
-│   ├── YumeInfrastructure/      # 已实现内存资料库、安全存储根和文件 manifest；索引仍为计划能力
+│   ├── CYumeZlib/               # 已实现：ZIP 条目流式解压 + CRC 校验的 C 接口
+│   ├── YumeDomain/              # 已实现：游戏、引擎、导入状态机、staging manifest、检测证据、预算等值类型
+│   ├── YumeApplication/         # 已实现：资料库查询、导入协调器、导入服务、检测注册表协议、诊断协议、存档迁移协议
+│   ├── YumeInfrastructure/      # 已实现：内存资料库、安全存储、SafeZIPExtractor、内置检测器、SHA-256、本地诊断存储
 │   └── YumeEngineHost/          # 已实现首版宿主协议骨架
-├── Tests/                       # 已实现领域模型与资料库查询单元测试
+├── Tests/                       # 已实现领域、应用、基础设施单元测试与目录导入集成测试
 └── Package.swift
 EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 │   ├── RenPyLegacy/             # 7.x 兼容带
@@ -134,7 +135,9 @@ EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 - `SaveDescriptor`、`ControlProfile`
 - `EngineEvent`、`SessionState`、`DiagnosticID`
 
-当前已实现 `GameID`、`ImportedGame`、`EngineID`、`EngineDescriptor`、`ImportTaskID`、`ImportState`、`StorageRelativePath`、`StagingManifest` 与首版 `EngineEvent`/宿主骨架；其余条目仍是计划模型。
+当前已实现 `GameID`、`ImportedGame`（含 `contentFingerprint`）、`EngineID`、`EngineDescriptor`、`ImportTaskID`、`ImportState`、`StorageRelativePath`、`StagingManifest`、`DetectionEvidence`、`ProbeResult`、`CompatibilityReport`、`GameManifest`、`StorageBudget`、`DiagnosticEntry` 与首版 `EngineEvent`/宿主骨架；其余条目仍是计划模型。
+
+检测协议已按“检测器与运行适配器分离”落地：`DetectionSnapshot` 提供大小写/分隔符归一化的只读文件清单，`DetectorRegistry.decide` 返回 `selected/ambiguous/noMatch`，`SignatureGameDetector` 用声明式规则（必需/佐证/阻断扩展名）产出证据与兼容报告。
 
 宿主协议保持小而稳定，概念接口如下；实际签名可在首条纵向切片中校正：
 
@@ -183,6 +186,8 @@ picked
 
 当前已实现纯 `ImportStateMachine` 与 actor `ImportCoordinator`：合法分支由显式邻接规则控制，重复 pause/resume/同阶段推进不重复写 checkpoint；取消、失败和完成先持久化终态再幂等清理 staging。启动发现 active 任务时先写为同阶段 paused，调用方重新验证输入、空间和配方后才能 resume；损坏 manifest、checkpoint 写入失败或终态清理失败逐任务报告并保留数据。`committed` 表示已经越过原子提交点，此后禁止普通取消/失败，只能暂停核对后完成，避免把已提交游戏当作未提交数据处理。
 
+在协调器之上，actor `DirectoryGameImportService` 已把目录与 ZIP 源接入完整事务：验证源 → 动态空间预算（含 `max(2 GiB, 容量 5%)`、上限 10 GiB 的安全预留）→ staging 复制/安全解压 → 内容指纹查重 → 多候选根检测 → 歧义与重复游戏由 UI 决策回调裁决 → 兼容扫描 → 原子提交资料库。加密 ZIP 当前直接拒绝，7z 等待组件选型门禁。
+
 只自动展开用户选择的顶层 ZIP/7z，不递归展开其中的通用归档。一个归档发现多个游戏根目录时，每个候选形成独立提交单元。
 
 ### 7.2 运行会话
@@ -204,20 +209,19 @@ picked
 ```text
 Application Support/Yume/
 ├── Games/<game-id>/
-│   ├── original/                # 不可变导入副本
-│   ├── derived/                 # 可重建、删除前需用户确认
-│   ├── saves/                   # 用户关键数据，永不自动删除
-│   ├── manifest.json            # 检测、输入哈希、配方和版本
-│   └── logs/                    # 单游戏滚动日志
-├── Staging/<task-id>/
-│   ├── manifest.json            # 已实现：版本、任务 ID、状态、时间与归属相对路径
-│   └── content/                 # 已实现：任务内容根；与元数据隔离
-├── Cache/                       # 可自动清理的普通缓存
-├── Diagnostics/                 # App 级诊断索引/导出临时文件
-└── Library.sqlite               # 逻辑名称；具体持久化技术待原型确定
+│   ├── original/                # 已实现：导入后只读的不可变副本
+│   ├── derived/                 # 已创建；转换结果仍为计划能力
+│   ├── saves/                   # 已实现：含 localStorage 桥与 .yumesave 离线迁移
+│   ├── manifest.json            # 已实现：检测证据、内容根、格式版本
+│   └── logs/                    # 已创建；按游戏滚动日志仍为计划能力
+├── Staging/<task-id>/           # 已实现：manifest + content/<task 内容>
+├── DetachedSaves/<game-id>/     # 已实现：删除游戏时保留的存档与来源 manifest
+├── Cache/                       # 已实现：存档导出/导入事务临时区
+├── Diagnostics/                 # 已实现：本地 JSONL 诊断日志与导出
+└── Library.sqlite               # 计划；当前以目录扫描 + manifest 为真相来源
 ```
 
-当前 `LocalGameStorage` 已实现固定根目录创建、对 staging/缓存/诊断的选择性备份排除、iOS 文件保护、任务发现、manifest 原子写入、相对路径验证、符号链接拒绝和按强类型任务 ID 的幂等 staging 清理。`Games/` 根不整体排除备份，避免未来连带排除 `saves/`；后续创建 `original/derived` 时再分别标记。它不提供任意 URL 删除接口，也尚未实现 `Games/<game-id>` 原子提交、资料库索引、容量预算或启动恢复策略；这些仍须由后续 Application 协调器完成。
+当前 `LocalGameStorage` 已实现固定根目录创建、对 staging/缓存/诊断的选择性备份排除、iOS 文件保护、任务发现、manifest 原子写入、相对路径验证、符号链接拒绝和按强类型任务 ID 的幂等 staging 清理。它同时实现了 `Games/<game-id>` 的原子提交（含同卷移动、替换旧版时保留存档与身份）、`original/` 只读化及删除/清理前的可写恢复、按内容指纹的重复检测与分离存档（`DetachedSaves/`）重挂、存储占用明细与最近游玩标记。`GameContentLocation` 目前只对 MV/MZ/TyranoScript 三类 Web 引擎给出可运行内容根，并要求存在 `index.html`；其他引擎在运行时门禁解除前返回 `runtimeUnavailable`。资料库仍以目录扫描为真相来源，SQLite/SwiftData 索引与容量预算执行仍是计划能力。
 
 数据所有权规则：
 
@@ -304,13 +308,13 @@ Application Support/Yume/
 ## 15. 实施顺序与当前切片
 
 1. 为目标引擎制作合法最小夹具，并准备 Apple 规则 4.7 预沟通材料。
-2. 创建 App/Domain/Application/Infrastructure/EngineHost 骨架和本地诊断。
-3. 用 MV/MZ 完成第一条纵向切片：ZIP/7z 导入、检测、兼容报告、WKWebView 启动、输入、存档、退出和诊断。
-4. 固化安全归档、编码、转换 manifest、恢复和磁盘清理机制。
+2. 创建 App/Domain/Application/Infrastructure/EngineHost 骨架和本地诊断。已完成：宿主骨架、导入事务（安全 ZIP 解包、检测、预算、原子提交、恢复）、资料库持久化与维护、存档离线迁移、本地诊断和受限 Web 播放器原型。
+3. 用 MV/MZ 完成第一条纵向切片：ZIP/7z 导入、检测、兼容报告、WKWebView 启动、输入、存档、退出和诊断。开发版已打通 MV/MZ/Tyrano 目录与 ZIP 导入到 WKWebView 运行、localStorage 存档桥和退出；7z、转换管线与合法夹具验证仍缺，不得据此宣称支持任何引擎。
+4. 固化安全归档、编码、转换 manifest、恢复和磁盘清理机制。安全 ZIP 已落地（路径逃逸/符号链接/压缩炸弹/加密拒绝、ZIP64、CRC 校验）；7z 与编码确认待组件选型门禁。
 5. 每次接入一个引擎适配器，并先完成其许可审计、夹具和兼容矩阵。
 6. 全引擎达到发布门槛后进入外部 TestFlight 和上架准备。
 
-截至 2026-08-26，上述步骤均未进入代码实现；当前成果是产品约束、决策档案和本文架构基线。
+截至 2026-08-26，步骤 2 已完成开发版实现；步骤 3 的 Web 引擎链路已有可编译目标但未经真机验证，且所有引擎兼容实现仍受“夹具先于实现”与规则 4.7 预沟通门禁约束。
 
 ## 16. 架构维护规则
 

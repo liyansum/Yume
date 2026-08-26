@@ -1,7 +1,56 @@
+import Foundation
 import YumeDomain
 
 public protocol GameLibrary: Sendable {
     func allGames() async throws -> [ImportedGame]
+    func game(id: GameID) async throws -> ImportedGame?
+    func markPlayed(id: GameID, at date: Date) async throws
+}
+
+public extension GameLibrary {
+    func game(id: GameID) async throws -> ImportedGame? {
+        try await allGames().first { $0.id == id }
+    }
+}
+
+public enum GameRemovalPolicy: String, Codable, Hashable, Sendable {
+    case preserveSaves
+    case deleteSaves
+}
+
+public struct GameStorageBreakdown: Codable, Hashable, Sendable {
+    public let gameID: GameID
+    public let originalByteCount: Int64
+    public let derivedByteCount: Int64
+    public let saveByteCount: Int64
+    public let logByteCount: Int64
+
+    public var totalByteCount: Int64 {
+        [originalByteCount, derivedByteCount, saveByteCount, logByteCount]
+            .reduce(0) { partial, value in
+                let addition = partial.addingReportingOverflow(value)
+                return addition.overflow ? Int64.max : addition.partialValue
+            }
+    }
+
+    public init(
+        gameID: GameID,
+        originalByteCount: Int64,
+        derivedByteCount: Int64,
+        saveByteCount: Int64,
+        logByteCount: Int64
+    ) {
+        self.gameID = gameID
+        self.originalByteCount = max(0, originalByteCount)
+        self.derivedByteCount = max(0, derivedByteCount)
+        self.saveByteCount = max(0, saveByteCount)
+        self.logByteCount = max(0, logByteCount)
+    }
+}
+
+public protocol GameMaintenance: Sendable {
+    func storageBreakdown(for id: GameID) async throws -> GameStorageBreakdown
+    func removeGame(id: GameID, policy: GameRemovalPolicy) async throws
 }
 
 public enum LibrarySort: String, CaseIterable, Codable, Hashable, Sendable {

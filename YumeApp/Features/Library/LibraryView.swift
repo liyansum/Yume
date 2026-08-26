@@ -18,9 +18,6 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var sort = LibrarySort.recentlyPlayed
     @State private var presentsFileImporter = false
-    @State private var presentsImportResult = false
-    @State private var selectedSourceCount = 0
-    @State private var selectionFailed = false
 
     private var layout: LayoutMode {
         get {
@@ -68,20 +65,53 @@ struct LibraryView: View {
         .toolbar { toolbarContent }
         .fileImporter(
             isPresented: $presentsFileImporter,
-            allowedContentTypes: supportedImportTypes,
+            allowedContentTypes: [.folder, .zip],
             allowsMultipleSelection: true,
             onCompletion: handleFileSelection
         )
-        .alert("import.development.title", isPresented: $presentsImportResult) {
-            Button("common.ok", role: .cancel) {}
+        .overlay {
+            if model.isImporting {
+                ImportProgressOverlay(progress: model.importProgress)
+            }
+        }
+        .alert(importAlertTitle, isPresented: importNoticeBinding) {
+            Button("common.ok", role: .cancel) {
+                model.dismissImportNotice()
+            }
         } message: {
-            if selectionFailed {
-                Text("import.selection.failed")
-            } else {
+            Text(importAlertMessage)
+        }
+        .sheet(isPresented: detectionChoiceBinding) {
+            if let choice = model.detectionChoice {
+                DetectionChoiceView(
+                    candidates: choice.candidates,
+                    choose: model.chooseDetection,
+                    cancel: model.cancelDetectionChoice
+                )
+                .presentationDetents([.medium, .large])
+                .interactiveDismissDisabled()
+            }
+        }
+        .confirmationDialog(
+            "import.duplicate.title",
+            isPresented: duplicateChoiceBinding,
+            titleVisibility: .visible
+        ) {
+            Button("import.duplicate.keepBoth") {
+                model.resolveDuplicateChoice(.keepBoth)
+            }
+            Button("import.duplicate.replace", role: .destructive) {
+                model.resolveDuplicateChoice(.replaceExisting)
+            }
+            Button("common.cancel", role: .cancel) {
+                model.resolveDuplicateChoice(.cancel)
+            }
+        } message: {
+            if let existing = model.duplicateChoice?.existingGame {
                 Text(
                     String.localizedStringWithFormat(
-                        String(localized: "import.development.message"),
-                        selectedSourceCount
+                        String(localized: "import.duplicate.message"),
+                        existing.title
                     )
                 )
             }
@@ -108,7 +138,12 @@ struct LibraryView: View {
                 spacing: 20
             ) {
                 ForEach(visibleGames) { game in
-                    GameGridItem(game: game)
+                    NavigationLink {
+                        GameDetailView(game: game, model: model)
+                    } label: {
+                        GameGridItem(game: game)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding()
@@ -117,7 +152,11 @@ struct LibraryView: View {
 
     private var list: some View {
         List(visibleGames) { game in
-            GameListItem(game: game)
+            NavigationLink {
+                GameDetailView(game: game, model: model)
+            } label: {
+                GameListItem(game: game)
+            }
         }
         .listStyle(.insetGrouped)
     }
@@ -152,25 +191,147 @@ struct LibraryView: View {
         }
     }
 
-    private var supportedImportTypes: [UTType] {
-        var types: [UTType] = [.zip, .folder]
-        if let sevenZip = UTType(filenameExtension: "7z") {
-            types.append(sevenZip)
-        }
-        return types
-    }
-
     private func handleFileSelection(_ result: Result<[URL], any Error>) {
         switch result {
         case let .success(urls):
             guard !urls.isEmpty else { return }
-            selectedSourceCount = urls.count
-            selectionFailed = false
+            Task { await model.importSources(urls) }
         case .failure:
-            selectedSourceCount = 0
-            selectionFailed = true
+            break
         }
-        presentsImportResult = true
+    }
+
+    private var importNoticeBinding: Binding<Bool> {
+        Binding(
+            get: { model.importNotice != nil },
+            set: { if !$0 { model.dismissImportNotice() } }
+        )
+    }
+
+    private var detectionChoiceBinding: Binding<Bool> {
+        Binding(
+            get: { model.detectionChoice != nil },
+            set: { if !$0 { model.cancelDetectionChoice() } }
+        )
+    }
+
+    private var duplicateChoiceBinding: Binding<Bool> {
+        Binding(
+            get: { model.duplicateChoice != nil },
+            set: { if !$0, model.duplicateChoice != nil { model.resolveDuplicateChoice(.cancel) } }
+        )
+    }
+
+    private var importAlertTitle: LocalizedStringKey {
+        guard let notice = model.importNotice else { return "import.result.failure.title" }
+        switch notice.kind {
+        case .success: "import.result.success.title"
+        case .partialSuccess: "import.result.partial.title"
+        case .failure: "import.result.failure.title"
+        }
+    }
+
+    private var importAlertMessage: LocalizedStringKey {
+        guard let notice = model.importNotice else { return "import.failure.unreadable" }
+        switch notice.kind {
+        case .success:
+            "import.result.success.message"
+        case .partialSuccess(_, let failure), .failure(let failure):
+            failure.localizedKey
+        }
+    }
+}
+
+private struct DetectionChoiceView: View {
+    let candidates: [ProbeResult]
+    let choose: (ProbeResult) -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            List(Array(candidates.enumerated()), id: \.offset) { _, candidate in
+                Button {
+                    choose(candidate)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(candidate.engine.displayName)
+                            .font(.headline)
+                        Text(candidate.rootRelativePath.rawValue)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text(
+                            String.localizedStringWithFormat(
+                                String(localized: "import.ambiguity.confidence"),
+                                Int64(candidate.confidence)
+                            )
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("import.ambiguity.title")
+            .safeAreaInset(edge: .bottom) {
+                Text("import.ambiguity.message")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("common.cancel", action: cancel)
+                }
+            }
+        }
+    }
+}
+
+private struct ImportProgressOverlay: View {
+    let progress: GameImportProgress?
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView()
+                .controlSize(.large)
+            Text(progress?.localizedKey ?? "import.progress.validating")
+                .font(.headline)
+        }
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .shadow(radius: 18)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private extension GameImportProgress {
+    var localizedKey: LocalizedStringKey {
+        switch self {
+        case .validating: "import.progress.validating"
+        case .budgeting: "import.progress.budgeting"
+        case .copying: "import.progress.copying"
+        case .detecting: "import.progress.detecting"
+        case .committing: "import.progress.committing"
+        }
+    }
+}
+
+private extension AppModel.ImportNotice.Failure {
+    var localizedKey: LocalizedStringKey {
+        switch self {
+        case .archiveNotAvailable: "import.failure.archiveNotAvailable"
+        case .encryptedArchive: "import.failure.encryptedArchive"
+        case .unsupportedArchive: "import.failure.unsupportedArchive"
+        case .unsafeArchive: "import.failure.unsafeArchive"
+        case .insufficientStorage: "import.failure.insufficientStorage"
+        case .noSupportedGame: "import.failure.noSupportedGame"
+        case .ambiguous: "import.failure.ambiguous"
+        case .unsupported: "import.failure.unsupported"
+        case .duplicate: "import.failure.duplicate"
+        case .unreadable: "import.failure.unreadable"
+        }
     }
 }
 
