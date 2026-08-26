@@ -1,0 +1,28 @@
+# Xcode user state and build products
+.DS_Store
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager generated files
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+
+# Local diagnostics, imported games, caches, and secrets
+*.log
+*.xcresult
+.env
+.env.*
+!.env.example
+Diagnostics/
+Staging/
+Application Support/
+
+# Editor and temporary files
+.idea/
+.vscode/
+*.swp
+*~
