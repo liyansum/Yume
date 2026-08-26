@@ -35,6 +35,10 @@ let package = Package(
         .testTarget(
             name: "YumeApplicationTests",
             dependencies: ["YumeApplication", "YumeDomain"]
+        ),
+        .testTarget(
+            name: "YumeInfrastructureTests",
+            dependencies: ["YumeInfrastructure", "YumeApplication", "YumeDomain"]
         )
     ]
 )

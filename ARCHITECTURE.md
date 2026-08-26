@@ -102,9 +102,9 @@ YumeApp/
 └── Resources/                   # 本地化和权利清楚的 App 自有资源
 YumeCore/
 ├── Sources/
-│   ├── YumeDomain/              # 已实现首批游戏、引擎与导入状态值类型
-│   ├── YumeApplication/         # 已实现 GameLibrary 协议与资料库查询
-│   ├── YumeInfrastructure/      # 已实现可替换的内存资料库；持久化等为计划能力
+│   ├── YumeDomain/              # 已实现首批游戏、引擎、导入状态、staging manifest 值类型
+│   ├── YumeApplication/         # 已实现资料库查询与导入 staging 存储协议
+│   ├── YumeInfrastructure/      # 已实现内存资料库、安全存储根和文件 manifest；索引仍为计划能力
 │   └── YumeEngineHost/          # 已实现首版宿主协议骨架
 ├── Tests/                       # 已实现领域模型与资料库查询单元测试
 └── Package.swift
@@ -133,6 +133,8 @@ EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 - `StorageBudget`、`ResourceBudget`
 - `SaveDescriptor`、`ControlProfile`
 - `EngineEvent`、`SessionState`、`DiagnosticID`
+
+当前已实现 `GameID`、`ImportedGame`、`EngineID`、`EngineDescriptor`、`ImportTaskID`、`ImportState`、`StorageRelativePath`、`StagingManifest` 与首版 `EngineEvent`/宿主骨架；其余条目仍是计划模型。
 
 宿主协议保持小而稳定，概念接口如下；实际签名可在首条纵向切片中校正：
 
@@ -205,11 +207,15 @@ Application Support/Yume/
 │   ├── saves/                   # 用户关键数据，永不自动删除
 │   ├── manifest.json            # 检测、输入哈希、配方和版本
 │   └── logs/                    # 单游戏滚动日志
-├── Staging/<task-id>/           # 未提交任务，受 manifest 约束清理
+├── Staging/<task-id>/
+│   ├── manifest.json            # 已实现：版本、任务 ID、状态、时间与归属相对路径
+│   └── content/                 # 已实现：任务内容根；与元数据隔离
 ├── Cache/                       # 可自动清理的普通缓存
 ├── Diagnostics/                 # App 级诊断索引/导出临时文件
 └── Library.sqlite               # 逻辑名称；具体持久化技术待原型确定
 ```
+
+当前 `LocalGameStorage` 已实现固定根目录创建、对 staging/缓存/诊断的选择性备份排除、iOS 文件保护、任务发现、manifest 原子写入、相对路径验证、符号链接拒绝和按强类型任务 ID 的幂等 staging 清理。`Games/` 根不整体排除备份，避免未来连带排除 `saves/`；后续创建 `original/derived` 时再分别标记。它不提供任意 URL 删除接口，也尚未实现 `Games/<game-id>` 原子提交、资料库索引、容量预算或启动恢复策略；这些仍须由后续 Application 协调器完成。
 
 数据所有权规则：
 
