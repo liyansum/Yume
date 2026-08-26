@@ -2,7 +2,7 @@ import Foundation
 import YumeApplication
 import YumeDomain
 
-public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvider, GameMaintenance, GameSaveTransfer {
+public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvider, GameMaintenance, GameSaveTransfer, GameRuntimePackageStore {
     public struct Layout: Sendable, Equatable {
         public let root: URL
         public let games: URL
@@ -10,6 +10,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         public let cache: URL
         public let diagnostics: URL
         public let detachedSaves: URL
+        public let rtp: URL
 
         fileprivate init(root: URL) {
             self.root = root
@@ -18,6 +19,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             self.cache = root.appendingPathComponent("Cache", isDirectory: true)
             self.diagnostics = root.appendingPathComponent("Diagnostics", isDirectory: true)
             self.detachedSaves = root.appendingPathComponent("DetachedSaves", isDirectory: true)
+            self.rtp = root.appendingPathComponent("RTP", isDirectory: true)
         }
     }
 
@@ -76,6 +78,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         try ensureManagedDirectory(layout.cache, excludedFromBackup: true)
         try ensureManagedDirectory(layout.diagnostics, excludedFromBackup: true)
         try ensureManagedDirectory(layout.detachedSaves, excludedFromBackup: false)
+        try ensureManagedDirectory(layout.rtp, excludedFromBackup: true)
     }
 
     public func createStagingTask(
@@ -638,6 +641,112 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             try? fileManager.removeItem(at: transactionRoot)
             throw error
         }
+    }
+
+    public func listRTPPackages() async throws -> [RTPPackage] {
+        try await prepareStorage()
+        return try loadRTPIndex().packages
+    }
+
+    public func importRTPPackage(
+        named name: String,
+        engine: EngineID,
+        from directoryURL: URL
+    ) async throws -> RTPPackage {
+        guard RTPPackage.isValidName(name) else { throw RTPStoreError.invalidName }
+        try await prepareStorage()
+
+        var index = try loadRTPIndex()
+        guard !index.packages.contains(where: { $0.id == name }) else {
+            throw RTPStoreError.duplicateName
+        }
+
+        let source = directoryURL.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw RTPStoreError.sourceIsNotDirectory
+        }
+        let summary = try summarizeTree(at: source)
+        guard summary.fileCount > 0 else { throw RTPStoreError.sourceIsEmpty }
+
+        let engineDirectory = layout.rtp.appendingPathComponent(engine.id.rawValue, isDirectory: true)
+        let destination = engineDirectory.appendingPathComponent(name, isDirectory: true)
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw RTPStoreError.duplicateName
+        }
+        try ensureManagedDirectory(engineDirectory, excludedFromBackup: true)
+
+        do {
+            _ = try copyValidatedTree(from: source, to: destination)
+            let package = RTPPackage(
+                id: name,
+                engineID: engine,
+                importedAt: Date(),
+                fileCount: summary.fileCount,
+                byteCount: summary.byteCount
+            )
+            index.upsert(package)
+            try writeRTPIndex(index)
+            return package
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw error
+        }
+    }
+
+    public func removeRTPPackage(id: String) async throws {
+        try await prepareStorage()
+        var index = try loadRTPIndex()
+        guard let package = index.packages.first(where: { $0.id == id }) else {
+            throw RTPStoreError.packageNotFound
+        }
+
+        let engineDirectory = layout.rtp.appendingPathComponent(package.engineID.rawValue, isDirectory: true)
+        let packageURL = engineDirectory.appendingPathComponent(id, isDirectory: true)
+        if fileManager.fileExists(atPath: packageURL.path) {
+            try validateExistingManagedDirectory(packageURL)
+            makeTreeWritable(at: packageURL)
+            try fileManager.removeItem(at: packageURL)
+        }
+        index.remove(id: id)
+        try writeRTPIndex(index)
+    }
+
+    public func rtpMountRoots(for game: ImportedGame) async throws -> [URL] {
+        try await prepareStorage()
+        return try loadRTPIndex().packages
+            .filter { $0.engineID == game.engine.id }
+            .map { package in
+                layout.rtp
+                    .appendingPathComponent(package.engineID.rawValue, isDirectory: true)
+                    .appendingPathComponent(package.id, isDirectory: true)
+            }
+    }
+
+    private func rtpIndexURL() -> URL {
+        layout.rtp.appendingPathComponent("manifest.json")
+    }
+
+    private func loadRTPIndex() throws -> RTPIndex {
+        let url = rtpIndexURL()
+        guard fileManager.fileExists(atPath: url.path) else { return RTPIndex() }
+        do {
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            let index = try decoder().decode(RTPIndex.self, from: data)
+            guard index.formatVersion == RTPIndex.currentFormatVersion else {
+                throw RTPStoreError.corruptIndex
+            }
+            return index
+        } catch let error as RTPStoreError {
+            throw error
+        } catch {
+            throw RTPStoreError.corruptIndex
+        }
+    }
+
+    private func writeRTPIndex(_ index: RTPIndex) throws {
+        let data = try encoder().encode(index)
+        try data.write(to: rtpIndexURL(), options: [.atomic])
     }
 
     private func taskRootURL(for id: ImportTaskID) -> URL {

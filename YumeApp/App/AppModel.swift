@@ -45,6 +45,7 @@ final class AppModel {
     private let saveTransfer: any GameSaveTransfer
     private let diagnostics: any DiagnosticStore
     private let playSessions: PlaySessionCoordinator
+    private let rtpStore: any GameRuntimePackageStore
     let engineCatalog: GameEngineCatalog
     private var hasLoaded = false
     private var detectionContinuation: CheckedContinuation<ProbeResult?, Never>?
@@ -66,6 +67,7 @@ final class AppModel {
     private(set) var recoveredTasks: [StagingManifest] = []
     private(set) var diagnosticEntries: [DiagnosticEntry] = []
     private(set) var isPlaybackSuspended = false
+    private(set) var rtpPackages: [RTPPackage] = []
 
     init(
         library: any GameLibrary,
@@ -75,6 +77,7 @@ final class AppModel {
         saveTransfer: any GameSaveTransfer,
         diagnostics: any DiagnosticStore,
         playSessions: PlaySessionCoordinator,
+        rtpStore: any GameRuntimePackageStore,
         engineCatalog: GameEngineCatalog
     ) {
         self.library = library
@@ -84,6 +87,7 @@ final class AppModel {
         self.saveTransfer = saveTransfer
         self.diagnostics = diagnostics
         self.playSessions = playSessions
+        self.rtpStore = rtpStore
         self.engineCatalog = engineCatalog
     }
 
@@ -116,6 +120,7 @@ final class AppModel {
             saveTransfer: storage,
             diagnostics: diagnostics,
             playSessions: playSessions,
+            rtpStore: storage,
             engineCatalog: catalog
         )
     }
@@ -344,6 +349,32 @@ final class AppModel {
         }
         do {
             try await saveTransfer.importSaves(from: url, for: game.id)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func refreshRTPPackages() async {
+        rtpPackages = (try? await rtpStore.listRTPPackages()) ?? []
+    }
+
+    func importRTPPackage(named name: String, engine: EngineID, from url: URL) async -> Bool {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        do {
+            _ = try await rtpStore.importRTPPackage(named: name, engine: engine, from: url)
+            await refreshRTPPackages()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func removeRTPPackage(_ package: RTPPackage) async -> Bool {
+        do {
+            try await rtpStore.removeRTPPackage(id: package.id)
+            await refreshRTPPackages()
             return true
         } catch {
             return false

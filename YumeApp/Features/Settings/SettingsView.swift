@@ -15,6 +15,12 @@ struct SettingsView: View {
                 }
 
                 NavigationLink {
+                    RTPSettingsView(model: model)
+                } label: {
+                    Label("settings.rtp", systemImage: "shippingbox")
+                }
+
+                NavigationLink {
                     ControlSettingsView()
                 } label: {
                     Label("settings.controls", systemImage: "gamecontroller")

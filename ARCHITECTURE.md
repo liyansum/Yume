@@ -105,8 +105,8 @@ YumeCore/
 ├── Sources/
 │   ├── CYumeZlib/               # 已实现：ZIP 条目解压+CRC 与通用 zlib 解压（含 adler32 校验）的 C 接口
 │   ├── YumeDomain/              # 已实现：游戏、引擎、导入状态机、staging manifest、检测证据、预算等值类型
-│   ├── YumeApplication/         # 已实现：资料库查询、导入协调器、导入服务、检测注册表协议、引擎目录、独占会话协调器、诊断协议、存档迁移协议
-│   ├── YumeInfrastructure/      # 已实现：内存资料库、安全存储、SafeZIPExtractor、KirikiriXP3Archive、RenPyRPAArchive、SWFFileParser、NScripterArchive、NScripterScriptScanner、内置检测器、SHA-256、本地诊断存储
+│   ├── YumeApplication/         # 已实现：资料库查询、导入协调器、导入服务、检测注册表协议、引擎目录、独占会话协调器、启动计划适配器、RTP 包协议、诊断与存档迁移协议
+│   ├── YumeInfrastructure/      # 已实现：内存资料库、安全存储、SafeZIPExtractor、KirikiriXP3Archive、RenPyRPAArchive、RGSSArchive（v1 索引；v3 仅识别）、SWFFileParser（含 CWS 压缩体）、NScripterArchive/Scanner、内置检测器、SHA-256、本地诊断存储、用户 RTP 包存储
 │   └── YumeEngineHost/          # 已实现首版宿主协议骨架
 ├── Tests/                       # 已实现领域、应用、基础设施单元测试与目录导入集成测试
 └── Package.swift
@@ -218,6 +218,7 @@ Application Support/Yume/
 │   ├── manifest.json            # 已实现：检测证据、内容根、格式版本
 │   └── logs/                    # 已创建；按游戏滚动日志仍为计划能力
 ├── Staging/<task-id>/           # 已实现：manifest + content/<task 内容>
+├── RTP/<engine>/<name>/         # 已实现：用户导入的本地运行时包（Yume 不分发），索引 manifest.json
 ├── DetachedSaves/<game-id>/     # 已实现：删除游戏时保留的存档与来源 manifest
 ├── Cache/                       # 已实现：存档导出/导入事务临时区
 ├── Diagnostics/                 # 已实现：本地 JSONL 诊断日志与导出

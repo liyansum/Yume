@@ -1764,3 +1764,27 @@ RGSS 游戏普遍依赖 RTP 标准素材。原路线（独立实现 + 只运行�
 - 原"App Store 首发""外部 TestFlight"里程碑作废，替换为"开源合规发布"门槛：SBOM 完整、全源码可复现构建、许可页齐全、法律复核通过。
 - 引擎开发策略从"逐项独立实现（夹具先行）"转为"逐项上游集成（审计先行）"：每引入一个上游实现，先冻结 commit、审计许可证与传递依赖、验证 iOS 真机性能，再进入兼容矩阵阶段。
 - 夹具要求不变：任何引擎宣称支持前仍需合法测试集验证核心流程与存档往返。
+
+### ADR-0054：RGSS 上游选型——mkxp-z
+
+- 状态：候选锁定，待 macOS/Xcode 静态构建验证
+- 依据（2026-08-26 核对）：https://github.com/mkxp-z/mkxp-z （默认分支 dev，持续构建，无固定 release）；许可证 GPL-2.0-or-later。
+- 关键条件：构建必须关闭 `enable-https`（默认开启会引入 OpenSSL/Apache-2.0，使二进制实际落入 GPLv3），保持纯 GPLv2 组合；SDL2/PhysFS/MRI Ruby 等传递依赖逐项冻结版本并出 SBOM；渲染层在 iOS 走 OpenGL ES/Metal 桥的方案需真机验证；游戏内容仍经 Yume 导入管线落盘，mkxp-z 只读挂载 `Games/<id>/original` 与用户 RTP 目录。
+
+### ADR-0055：ONS 上游选型——ONScripter 官方实现
+
+- 状态：候选锁定，待 iOS 构建验证
+- 依据（2026-08-26 核对）：https://ogapee.github.io/www/onscripter_en.html ，最新版 onscripter 20230825；源码 https://github.com/ogapee/onscripter ；许可证 GPL-2.0-only（上游衍生分支声明一致）。
+- 关键条件：该组件为 GPL-2.0-only，是 Yume 自有代码选择 GPL-2.0-or-later 的直接原因；官方历史含 iOS 移植路径；SDL2 版本与 mkxp-z 统一；加密 NSA/自定义方言仍明确不支持。
+
+### ADR-0056：Kirikiri 上游选型——krkrsdl2
+
+- 状态：候选锁定，待第三方依赖审计
+- 依据（2026-08-26 核对）：https://github.com/krkrsdl2/krkrsdl2 ；src 目录 MIT，项目声明包含非 GPL 第三方组件、须逐个核对许可证文件。
+- 关键条件：完成全部捆绑组件 SBOM 后才可合入；XP3 自定义加密/插件边界不变；与 Yume 既有 KirikiriXP3Archive 读取器的关系是"运行时自带完整解析"，读取器仅用于导入期诊断。
+
+### ADR-0057：Flash 上游选型——Ruffle
+
+- 状态：候选锁定，待 Rust→iOS 静态库验证
+- 依据（2026-08-26 核对）：https://github.com/ruffle-rs/ruffle ，v0.4.1（2026-07-19）；许可证 Apache-2.0 OR MIT 双许可。
+- 关键条件：使用其非 JIT 解释模式满足 iOS 禁 JIT 约束；Rust 交叉编译为 iOS 静态库（cargo-objc / swift-bridge 类方案）需验证；渲染后端（wgpu→Metal）包体与性能需真机评估；SharedObject 存档映射到 Yume saves 目录。

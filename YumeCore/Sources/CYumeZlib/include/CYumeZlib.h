@@ -34,4 +34,12 @@ int32_t yume_zlib_inflate_to_file(
     uint64_t expected_size
 );
 
+int32_t yume_zlib_inflate_mem(
+    const unsigned char *input_buffer,
+    uint64_t compressed_size,
+    unsigned char *output_buffer,
+    uint64_t output_capacity,
+    uint64_t *written_byte_count
+);
+
 #endif

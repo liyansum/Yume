@@ -39,6 +39,7 @@ struct RootView: View {
         }
         .task {
             await model.loadLibraryIfNeeded()
+            await model.refreshRTPPackages()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background, model.activeGame != nil else { return }

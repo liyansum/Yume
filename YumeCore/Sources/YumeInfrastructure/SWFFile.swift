@@ -1,3 +1,4 @@
+import CYumeZlib
 import Foundation
 
 public enum SWFError: Error, Equatable, Sendable {
@@ -75,7 +76,8 @@ public struct SWFFileParser: Sendable {
     private static let endTagCode: UInt16 = 0
     private static let longFormLengthMarker: UInt16 = 0x3F
     private static let maximumTagScanCount = 512
-    private static let maximumBitReaderBytes = 4 * 1_024 * 1_024
+    private static let maximumBitReaderBytes = 64 * 1_024 * 1_024
+    private static let maximumCompressedBodyByteCount: UInt64 = 128 * 1_024 * 1_024
 
     private let maximumTagSummaries: Int
 
@@ -97,37 +99,42 @@ public struct SWFFileParser: Sendable {
         else { throw SWFError.tooSmall }
 
         let signature = [UInt8](header.prefix(3))
+        let version = header[header.startIndex + 3]
+        guard version > 0 else { throw SWFError.invalidSignature }
+        let declaredByteCount = readUInt32LE(header, at: 4)
+        guard declaredByteCount >= UInt32(Self.headerByteCount) else { throw SWFError.truncatedHeader }
+        let fileSize = UInt64(values.fileSize ?? 0)
+
+        var body: Data
         switch Array(signature) {
         case Array("FWS".utf8):
-            break
+            try handle.seek(toOffset: UInt64(Self.headerByteCount))
+            let remainingLimit = min(Self.maximumBitReaderBytes, Int(min(UInt64(Int32.max), declaredByteCount)) - Self.headerByteCount)
+            guard remainingLimit > 0,
+                  let payload = try handle.read(upToCount: remainingLimit), !payload.isEmpty
+            else { throw SWFError.truncatedHeader }
+            body = payload
         case Array("CWS".utf8):
-            return SWFInspection(
-                compressionKind: .deflate,
-                version: header[header.startIndex + 3],
-                declaredByteCount: readUInt32LE(header, at: 4),
-                frameSize: nil,
-                frameRateRaw: nil,
-                frameCount: nil,
-                tagSummaries: []
-            )
+            guard fileSize > UInt64(Self.headerByteCount) else { throw SWFError.truncatedHeader }
+            let compressedLimit = Int(min(fileSize - UInt64(Self.headerByteCount), UInt64(Self.maximumCompressedBodyByteCount)))
+            try handle.seek(toOffset: UInt64(Self.headerByteCount))
+            guard let compressed = try handle.read(upToCount: compressedLimit), !compressed.isEmpty else {
+                throw SWFError.truncatedHeader
+            }
+            let uncompressedCapacity = Int(min(
+                UInt64(Int32.max),
+                declaredByteCount - UInt32(Self.headerByteCount)
+            ))
+            guard uncompressedCapacity > 0, uncompressedCapacity <= Self.maximumBitReaderBytes else {
+                throw SWFError.outOfBounds
+            }
+            body = try Self.inflateBody(compressed, expected: uncompressedCapacity)
         default:
             if signature.elementsEqual(Array("ZWS".utf8)) {
                 throw SWFError.lzmaUnsupported
             }
             throw SWFError.invalidSignature
         }
-
-        let version = header[header.startIndex + 3]
-        guard version > 0 else { throw SWFError.invalidSignature }
-        let declaredByteCount = readUInt32LE(header, at: 4)
-
-        try handle.seek(toOffset: UInt64(Self.headerByteCount))
-        let remainingLimit = min(Self.maximumBitReaderBytes, max(0, Int(declaredByteCount) - Self.headerByteCount))
-        guard remainingLimit > 0 else { throw SWFError.truncatedHeader }
-        guard let payload = try handle.read(upToCount: remainingLimit), !payload.isEmpty else {
-            throw SWFError.truncatedHeader
-        }
-        body = payload
 
         var reader = BitReader(data: body)
         let rect = try reader.readRect()
@@ -157,6 +164,24 @@ public struct SWFFileParser: Sendable {
             frameCount: frameCount,
             tagSummaries: summaries
         )
+    }
+
+    private static func inflateBody(_ compressed: Data, expected capacity: Int) throws -> Data {
+        var buffer = Data(count: capacity)
+        var written: UInt64 = 0
+        let result: Int32 = compressed.withUnsafeBytes { raw in
+            guard let input = raw.bindMemory(to: UInt8.self).baseAddress else {
+                return Int32(YUME_ZIP_INPUT_OPEN_FAILED)
+            }
+            return buffer.withUnsafeMutableBytes { out in
+                guard let output = out.bindMemory(to: UInt8.self).baseAddress else {
+                    return Int32(YUME_ZIP_OUTPUT_OPEN_FAILED)
+                }
+                return yume_zlib_inflate_mem(input, UInt64(raw.count), output, UInt64(capacity), &written)
+            }
+        }
+        guard result == YUME_ZIP_OK, written > 0 else { throw SWFError.truncatedHeader }
+        return buffer.prefix(Int(written))
     }
 
     private func readUInt32LE(_ data: Data, at offset: Int) -> UInt32 {

@@ -168,3 +168,16 @@
 "hosting.restrictedWeb" = "受限網頁殼";
 "hosting.dedicatedRuntime" = "獨立執行階段";
 "hosting.detectionOnly" = "僅識別";
+
+"settings.rtp" = "執行階段套件（RTP）";
+"rtp.title" = "執行階段套件";
+"rtp.message" = "匯入你合法持有的執行階段套件資料夾（例如 RPG Maker 的 RTP）。Yume 不下載也不再散布，僅儲存在本機並映射給需要的遊戲使用。";
+"rtp.empty.title" = "尚無執行階段套件";
+"rtp.empty.message" = "依賴標準素材的遊戲需要先在本機匯入對應的執行階段套件。";
+"rtp.import.action" = "匯入套件";
+"rtp.import.menu.title" = "選擇引擎";
+"rtp.import.menu.message" = "選擇此套件提供素材的引擎族；資料夾名稱將作為套件名稱。";
+"rtp.delete.confirm.title" = "刪除此套件？";
+"rtp.delete.confirm.message" = "將從本機儲存空間移除已匯入的資料夾與索引項目；Yume 以外的原始檔案不受影響。";
+"rtp.error.title" = "匯入失敗";
+"rtp.error.message" = "請使用名稱僅含英文數字與 . - _、至少包含一個檔案且不與現有套件重名的資料夾。";

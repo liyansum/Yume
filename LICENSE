@@ -1,0 +1,24 @@
+Yume — local multi-engine game compatibility runner
+Copyright (C) 2026 the Yume authors
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version, with the exception noted below.
+
+Combination notice: because Yume links against GPL-2.0-only components such as
+ONScripter, distributed combined binaries are provided under the terms of the
+GNU General Public License version 2. The complete corresponding source code,
+including build scripts, accompanies every distribution.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program (see COPYING.GPLv2); if not, write to the Free Software Foundation,
+Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA or obtain it
+at https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+Third-party components retain their own licenses; see the in-app open-source
+licenses page and NOTICE.md for the complete list.

@@ -168,3 +168,16 @@
 "hosting.restrictedWeb" = "受限网页壳";
 "hosting.dedicatedRuntime" = "独立运行时";
 "hosting.detectionOnly" = "仅识别";
+
+"settings.rtp" = "运行时包（RTP）";
+"rtp.title" = "运行时包";
+"rtp.message" = "导入你合法持有的运行时包文件夹（例如 RPG Maker 的 RTP）。Yume 不下载也不再分发，仅保存在本地并映射给需要的游戏使用。";
+"rtp.empty.title" = "尚无运行时包";
+"rtp.empty.message" = "依赖标准素材的游戏需要先在本地导入对应运行时包。";
+"rtp.import.action" = "导入包";
+"rtp.import.menu.title" = "选择引擎";
+"rtp.import.menu.message" = "选择该包提供素材的引擎族；文件夹名将作为包名。";
+"rtp.delete.confirm.title" = "删除该包？";
+"rtp.delete.confirm.message" = "将从本地存储移除已导入的文件夹与索引项；Yume 之外的源文件不受影响。";
+"rtp.error.title" = "导入失败";
+"rtp.error.message" = "请使用名称仅含英文数字与 . - _、至少包含一个文件且不与现有包重名的文件夹。";

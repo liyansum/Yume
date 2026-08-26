@@ -168,3 +168,16 @@
 "hosting.restrictedWeb" = "Restricted Web";
 "hosting.dedicatedRuntime" = "Dedicated Runtime";
 "hosting.detectionOnly" = "Detection Only";
+
+"settings.rtp" = "Runtime Packages (RTP)";
+"rtp.title" = "Runtime packages";
+"rtp.message" = "Import runtime package folders you legally hold (for example RPG Maker RTP). Yume never downloads or redistributes them; they are stored locally and mapped into games that need them.";
+"rtp.empty.title" = "No runtime packages";
+"rtp.empty.message" = "Games that depend on standard assets need a locally imported runtime package.";
+"rtp.import.action" = "Import Package";
+"rtp.import.menu.title" = "Choose engine";
+"rtp.import.menu.message" = "Select the engine family this package provides assets for. The folder name is used as the package name.";
+"rtp.delete.confirm.title" = "Delete package?";
+"rtp.delete.confirm.message" = "The imported folder and its index entry will be removed from local storage. Source files outside Yume are untouched.";
+"rtp.error.title" = "Import failed";
+"rtp.error.message" = "Use a folder with ASCII letters, digits, dot, dash or underscore in its name, containing at least one file, and not duplicating an existing package.";

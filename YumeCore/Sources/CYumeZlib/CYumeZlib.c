@@ -204,3 +204,66 @@ int32_t yume_zlib_inflate_to_file(
     if (fclose(output) != 0 && result == YUME_ZIP_OK) result = YUME_ZIP_WRITE_FAILED;
     return result;
 }
+
+int32_t yume_zlib_inflate_mem(
+    const unsigned char *input_buffer,
+    uint64_t compressed_size,
+    unsigned char *output_buffer,
+    uint64_t output_capacity,
+    uint64_t *written_byte_count
+) {
+    if (input_buffer == NULL || output_buffer == NULL || written_byte_count == NULL) {
+        return YUME_ZIP_OUTPUT_OPEN_FAILED;
+    }
+    *written_byte_count = 0;
+
+    uint64_t consumed = 0;
+    uint64_t written = 0;
+    uLong adler = adler32(0L, Z_NULL, 0);
+    int32_t result = YUME_ZIP_OK;
+
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (inflateInit(&stream) != Z_OK) {
+        return YUME_ZIP_INFLATE_FAILED;
+    }
+
+    stream.next_in = (Bytef *)(input_buffer + consumed);
+    stream.avail_in = compressed_size > 4 ? (uInt)(compressed_size - 4) : 0;
+
+    int z_result = Z_OK;
+    while (z_result != Z_STREAM_END) {
+        uint64_t capacity_left = written < output_capacity ? output_capacity - written : 0;
+        if (capacity_left == 0) {
+            result = YUME_ZIP_SIZE_MISMATCH;
+            break;
+        }
+        stream.next_out = output_buffer + written;
+        stream.avail_out = capacity_left > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (uInt)capacity_left;
+        z_result = inflate(&stream, Z_NO_FLUSH);
+        if (z_result != Z_OK && z_result != Z_STREAM_END) {
+            result = YUME_ZIP_INFLATE_FAILED;
+            break;
+        }
+        size_t produced = stream.avail_out < YUME_BUFFER_SIZE
+            ? ((capacity_left > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (uInt)capacity_left) - stream.avail_out)
+            : 0;
+        adler = adler32(adler, output_buffer + written, (uInt)produced);
+        written += produced;
+    }
+    inflateEnd(&stream);
+
+    if (result == YUME_ZIP_OK && written > output_capacity) result = YUME_ZIP_SIZE_MISMATCH;
+
+    if (result == YUME_ZIP_OK && compressed_size >= 4) {
+        const unsigned char *trailer = input_buffer + (compressed_size - 4);
+        uint32_t stored = (uint32_t)trailer[0]
+            | ((uint32_t)trailer[1] << 8)
+            | ((uint32_t)trailer[2] << 16)
+            | ((uint32_t)trailer[3] << 24);
+        if ((uint32_t)adler != stored) result = YUME_ZIP_CRC_MISMATCH;
+    }
+
+    if (result == YUME_ZIP_OK) *written_byte_count = written;
+    return result;
+}
