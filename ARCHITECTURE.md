@@ -1,8 +1,8 @@
 # Yume 技术架构
 
-> 文档状态：开发前架构基线  
+> 文档状态：开发架构基线
 > 最后更新：2026-08-26  
-> 当前实现状态：仓库尚无 Xcode 工程或业务代码，本文描述已确认的目标结构，不表示模块已经实现  
+> 当前实现状态：首个 SwiftUI 宿主骨架与核心模块已落地；存储、完整导入、诊断、播放器和引擎适配器仍是计划能力
 > 约束优先级：若本文与 `Agents.md` 冲突，以 `Agents.md` 为准
 
 ## 1. 新会话快速入口
@@ -77,31 +77,38 @@ Yume 是最低支持 iOS/iPadOS 18 的完全离线、本地多引擎游戏兼容
 
 依赖方向始终指向稳定协议。具体归档库、数据库、渲染后端或引擎运行时通过组合根注入，不能在界面和业务用例中散落静态单例。
 
-## 5. 预期工程与模块布局
+## 5. 当前工程与目标模块布局
 
-以下是创建 Xcode 工程时采用的目标导航结构；当前尚不存在，落地后应按真实目录更新本节。
+当前工程采用一个 iOS App target 加仓库内本地 Swift Package。真实入口如下：
+
+- [`Yume.xcodeproj`](Yume.xcodeproj)：iOS/iPadOS 18+ App 工程与共享 Scheme。
+- [`YumeApp/App`](YumeApp/App)：App 入口、依赖组合和 iPhone/iPad 自适应根导航。
+- [`YumeApp/Features`](YumeApp/Features)：已落地资料库与设置界面；Import、Player、Diagnostics 待后续切片创建。
+- [`YumeApp/Resources`](YumeApp/Resources)：自有颜色资源及简体中文、繁体中文、英语、日语本地化。
+- [`YumeCore`](YumeCore)：本地 Swift Package；当前提供 `YumeDomain`、`YumeApplication`、`YumeInfrastructure`、`YumeEngineHost` 四个静态模块及核心单元测试。
+
+当前代码布局与后续目标如下；标注“计划”的目录尚不存在：
 
 ```text
-Yume/
-├── App/                         # App 入口、依赖组合、scene 生命周期
+Yume.xcodeproj/
+YumeApp/
+├── App/                         # App 入口、组合根、自适应导航
 ├── Features/
-│   ├── Library/                 # 游戏库和详情
-│   ├── Import/                  # 文件选择、任务进度、确认与错误恢复
-│   ├── Player/                  # 渲染容器及输入覆盖层
-│   ├── Settings/                # 存储、控制、兼容性、日志、关于
-│   └── Diagnostics/             # 开发版详细诊断 / Release 普通诊断
-├── Domain/                      # 纯模型、用例协议、错误和状态定义
-├── Application/                 # 协调器与业务用例实现
-├── Infrastructure/
-│   ├── Archives/                # ZIP/7z、安全解包和密码处理
-│   ├── Detection/               # GameDetector 注册表与证据评分
-│   ├── Conversion/              # 版本化 ConversionRecipe
-│   ├── Persistence/             # 资料库索引与 manifest
-│   ├── Storage/                 # original/derived/saves/staging 生命周期
-│   ├── Media/                   # AVFoundation、图片、字体和编码能力
-│   └── Diagnostics/             # 结构化日志、资源预算和本地导出
-├── EngineHost/                  # 稳定宿主协议与共享运行服务
-├── EngineAdapters/
+│   ├── Library/                 # 已实现：空状态、搜索、排序、网格/列表、文件选择入口
+│   ├── Settings/                # 已实现：设置导航与关于/法律基础文案
+│   ├── Import/                  # 计划：任务进度、确认与错误恢复
+│   ├── Player/                  # 计划：渲染容器及输入覆盖层
+│   └── Diagnostics/             # 计划：开发版详细诊断 / Release 普通诊断
+└── Resources/                   # 本地化和权利清楚的 App 自有资源
+YumeCore/
+├── Sources/
+│   ├── YumeDomain/              # 已实现首批游戏、引擎与导入状态值类型
+│   ├── YumeApplication/         # 已实现 GameLibrary 协议与资料库查询
+│   ├── YumeInfrastructure/      # 已实现可替换的内存资料库；持久化等为计划能力
+│   └── YumeEngineHost/          # 已实现首版宿主协议骨架
+├── Tests/                       # 已实现领域模型与资料库查询单元测试
+└── Package.swift
+EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 │   ├── RenPyLegacy/             # 7.x 兼容带
 │   ├── RenPyModern/             # 8.x 兼容带
 │   ├── RGSS/                    # XP/VX/VX Ace
@@ -111,13 +118,6 @@ Yume/
 │   ├── Kirikiri/
 │   ├── Flash/
 │   └── TyranoScript/
-├── Tests/
-│   ├── Unit/
-│   ├── Integration/
-│   ├── Security/
-│   ├── Golden/
-│   └── Fixtures/                # 仅完全自有或书面授权样本
-└── Resources/                   # 本地化和权利清楚的 App 自有资源
 ```
 
 优先使用一个 App target 加本地 Swift Package/静态库划分模块，避免为形式上的模块化增加动态 framework。C/C++/Objective-C++ 运行时通过窄 C ABI 接入；符号默认隐藏，冲突时使用构建期前缀或经过验证的统一版本。
