@@ -164,6 +164,14 @@ struct LibraryView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            if !model.recoveredTasks.isEmpty {
+                NavigationLink {
+                    ImportTaskCenterView(model: model)
+                } label: {
+                    Label("library.tasks", systemImage: "circle.dashed")
+                }
+            }
+
             Menu {
                 Picker("library.sort.title", selection: $sort) {
                     ForEach(LibrarySort.allCases, id: \.self) { option in

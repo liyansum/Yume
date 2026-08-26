@@ -26,6 +26,7 @@ struct RootView: View {
     let model: AppModel
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedSection: Section? = .library
 
     var body: some View {
@@ -39,10 +40,17 @@ struct RootView: View {
         .task {
             await model.loadLibraryIfNeeded()
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background, model.activeGame != nil else { return }
+            model.suspendPlayback()
+        }
         .fullScreenCover(item: activeGameBinding) { location in
-            GamePlayerView(location: location) {
-                Task { await model.stopPlaying() }
-            }
+            GamePlayerView(
+                location: location,
+                suspended: model.isPlaybackSuspended,
+                onResume: { model.resumePlayback() },
+                onClose: { Task { await model.stopPlaying() } }
+            )
         }
         .alert("player.error.title", isPresented: playbackFailureBinding) {
             Button("common.ok", role: .cancel) {

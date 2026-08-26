@@ -95,17 +95,18 @@ YumeApp/
 ├── App/                         # 已实现：入口、组合根（AppModel.live()）、自适应导航
 ├── Features/
 │   ├── Library/                 # 已实现：网格/列表、搜索排序、详情、删除、存档迁移
-│   │                            # 已实现：文件选择导入入口与导入覆盖层（Import 未单独建目录）
+│   │                            # 已实现：文件选择导入入口、导入覆盖层与恢复任务中心入口
+│   ├── Import/                  # 已实现：只读导入任务中心（恢复后的 paused 任务与阶段展示）
 │   ├── Settings/                # 已实现：设置导航与关于/法律基础文案、诊断页
-│   ├── Player/                  # 已实现：受限 WKWebView 播放器、虚拟控制、本地存储桥
-│   └── Diagnostics/             # 计划：开发版详细诊断独立页（当前并入 Settings）
+│   ├── Player/                  # 已实现：受限 WKWebView 播放器、虚拟控制、本地存储桥、后台媒体挂起
+│   └── Diagnostics/             # 已实现：开发构建专用诊断页（#if DEBUG）；Release 仍走 Settings 内普通诊断
 └── Resources/                   # 本地化和权利清楚的 App 自有资源
 YumeCore/
 ├── Sources/
-│   ├── CYumeZlib/               # 已实现：ZIP 条目流式解压 + CRC 校验的 C 接口
+│   ├── CYumeZlib/               # 已实现：ZIP 条目解压+CRC 与通用 zlib 解压（含 adler32 校验）的 C 接口
 │   ├── YumeDomain/              # 已实现：游戏、引擎、导入状态机、staging manifest、检测证据、预算等值类型
-│   ├── YumeApplication/         # 已实现：资料库查询、导入协调器、导入服务、检测注册表协议、诊断协议、存档迁移协议
-│   ├── YumeInfrastructure/      # 已实现：内存资料库、安全存储、SafeZIPExtractor、内置检测器、SHA-256、本地诊断存储
+│   ├── YumeApplication/         # 已实现：资料库查询、导入协调器、导入服务、检测注册表协议、引擎目录、独占会话协调器、诊断协议、存档迁移协议
+│   ├── YumeInfrastructure/      # 已实现：内存资料库、安全存储、SafeZIPExtractor、KirikiriXP3Archive、RenPyRPAArchive、SWFFileParser、NScripterArchive、NScripterScriptScanner、内置检测器、SHA-256、本地诊断存储
 │   └── YumeEngineHost/          # 已实现首版宿主协议骨架
 ├── Tests/                       # 已实现领域、应用、基础设施单元测试与目录导入集成测试
 └── Package.swift
@@ -138,6 +139,8 @@ EngineAdapters/                  # 计划；通过对应门禁后逐项创建
 当前已实现 `GameID`、`ImportedGame`（含 `contentFingerprint`）、`EngineID`、`EngineDescriptor`、`ImportTaskID`、`ImportState`、`StorageRelativePath`、`StagingManifest`、`DetectionEvidence`、`ProbeResult`、`CompatibilityReport`、`GameManifest`、`StorageBudget`、`DiagnosticEntry` 与首版 `EngineEvent`/宿主骨架；其余条目仍是计划模型。
 
 检测协议已按“检测器与运行适配器分离”落地：`DetectionSnapshot` 提供大小写/分隔符归一化的只读文件清单，`DetectorRegistry.decide` 返回 `selected/ambiguous/noMatch`，`SignatureGameDetector` 用声明式规则（必需/佐证/阻断扩展名）产出证据与兼容报告。运行时可用性由 `GameEngineCatalog` 从检测器的 `runtimeAvailable` 派生为 `detectionOnly/restrictedWeb/dedicatedRuntime` 三类宿主策略；新增引擎适配器时只需注册新检测器并在目录中声明宿主形态。
+
+格式读取层已覆盖各首版引擎族的标准未加密载体，全部失败关闭并受 Limits 约束：`SafeZIPExtractor`（ZIP）、`KirikiriXP3Archive`（XP3 目录+条目提取；压缩条目暂拒绝）、`RenPyRPAArchive`（RPA-1.0/2.0/3.0 头与最小 cPickle 子集索引解码）、`SWFFileParser`（FWS 全量、CWS 仅头、ZWS 拒绝）、`NScripterArchive`（SAR/NSA 未加密目录）与 `NScripterScriptScanner`（UTF-8 脚本只读统计）。这些读取器是未来适配器探测与准备阶段的基础；所有实现仍需合法夹具在 macOS 上验证后才能作为兼容性结论依据。
 
 宿主协议保持小而稳定，概念接口如下；实际签名可在首条纵向切片中校正：
 

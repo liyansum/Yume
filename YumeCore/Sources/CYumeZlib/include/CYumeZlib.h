@@ -26,4 +26,12 @@ int32_t yume_zip_extract_entry(
     uint32_t expected_crc32
 );
 
+int32_t yume_zlib_inflate_to_file(
+    const char *input_path,
+    uint64_t data_offset,
+    uint64_t compressed_size,
+    const char *output_path,
+    uint64_t expected_size
+);
+
 #endif

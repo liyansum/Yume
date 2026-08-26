@@ -6,6 +6,8 @@ import YumeDomain
 
 struct GamePlayerView: View {
     let location: GameContentLocation
+    let suspended: Bool
+    let onResume: () -> Void
     let onClose: () -> Void
 
     @State private var loadFailed = false
@@ -19,6 +21,7 @@ struct GamePlayerView: View {
 
             RestrictedWebGameView(
                 location: location,
+                suspended: suspended,
                 inputCommand: inputCommand,
                 loadFailed: $loadFailed
             )
@@ -53,14 +56,40 @@ struct GamePlayerView: View {
                 }
             }
         }
+        .overlay(alignment: .bottom) {
+            if suspended {
+                suspensionOverlay
+            }
+        }
         .persistentSystemOverlays(.hidden)
+    }
+
+    private var suspensionOverlay: some View {
+        VStack(spacing: 14) {
+            Label("player.suspended.title", systemImage: "pause.circle.fill")
+                .font(.headline)
+            Button(action: onResume) {
+                Label("player.resume", systemImage: "play.fill")
+                    .frame(minWidth: 140, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+        }
+        .padding(24)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .padding(24)
     }
 }
 
 private struct RestrictedWebGameView: UIViewRepresentable {
     let location: GameContentLocation
+    let suspended: Bool
     let inputCommand: WebInputCommand?
     @Binding var loadFailed: Bool
+
+    static let mediaPauseFallbackScript = """
+    document.querySelectorAll('video,audio').forEach(m => m.pause());
+    """
 
     func makeCoordinator() -> Coordinator {
         Coordinator(loadFailed: $loadFailed)
@@ -93,6 +122,14 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        if suspended, !context.coordinator.didSuspendMediaPlayback {
+            context.coordinator.didSuspendMediaPlayback = true
+            webView.pauseAllMediaPlayback {}
+            webView.evaluateJavaScript(Self.mediaPauseFallbackScript)
+        } else if !suspended {
+            context.coordinator.didSuspendMediaPlayback = false
+        }
+
         guard let inputCommand, context.coordinator.lastInputCommandID != inputCommand.id else { return }
         context.coordinator.lastInputCommandID = inputCommand.id
         let script = """
@@ -114,6 +151,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         @Binding private var loadFailed: Bool
         var lastInputCommandID: UUID?
+        var didSuspendMediaPlayback = false
 
         init(loadFailed: Binding<Bool>) {
             _loadFailed = loadFailed

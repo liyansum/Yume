@@ -34,6 +34,14 @@ struct SettingsView: View {
                     Label("settings.diagnostics", systemImage: "waveform.path.ecg")
                 }
 
+                #if DEBUG
+                NavigationLink {
+                    DeveloperDiagnosticsView(model: model)
+                } label: {
+                    Label("diagnostics.dev.title", systemImage: "ladybug")
+                }
+                #endif
+
                 NavigationLink {
                     LicensesView()
                 } label: {
@@ -131,12 +139,12 @@ private struct CompatibilitySettingsView: View {
                     }
                     Spacer()
                     Label(
-                        entry.hostingKind.localizedKey,
-                        systemImage: entry.hostingKind.symbolName
+                        hostingLabel(for: entry.hostingKind),
+                        systemImage: hostingSymbol(for: entry.hostingKind)
                     )
                     .labelStyle(.iconOnly)
-                    .foregroundStyle(entry.hostingKind.tint)
-                    .accessibilityLabel(Text(entry.hostingKind.localizedKey))
+                    .foregroundStyle(hostingTint(for: entry.hostingKind))
+                    .accessibilityLabel(Text(hostingLabel(for: entry.hostingKind)))
                 }
                 .accessibilityElement(children: .combine)
             }
@@ -147,6 +155,30 @@ private struct CompatibilitySettingsView: View {
             }
         }
         .navigationTitle("settings.compatibility")
+    }
+
+    private func hostingLabel(for kind: EngineHostingKind) -> LocalizedStringKey {
+        switch kind {
+        case .restrictedWeb: "compatibility.runtime.available"
+        case .dedicatedRuntime: "compatibility.runtime.dedicated"
+        case .detectionOnly: "compatibility.runtime.detectionOnly"
+        }
+    }
+
+    private func hostingSymbol(for kind: EngineHostingKind) -> String {
+        switch kind {
+        case .restrictedWeb: "checkmark.circle.fill"
+        case .dedicatedRuntime: "shippingbox.circle.fill"
+        case .detectionOnly: "magnifyingglass.circle"
+        }
+    }
+
+    private func hostingTint(for kind: EngineHostingKind) -> Color {
+        switch kind {
+        case .restrictedWeb: .green
+        case .dedicatedRuntime: .blue
+        case .detectionOnly: .orange
+        }
     }
 }
 
@@ -248,31 +280,5 @@ private struct AboutView: View {
         }
         .navigationTitle("settings.about")
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private extension EngineHostingKind {
-    var localizedKey: LocalizedStringKey {
-        switch self {
-        case .restrictedWeb: "compatibility.runtime.available"
-        case .dedicatedRuntime: "compatibility.runtime.dedicated"
-        case .detectionOnly: "compatibility.runtime.detectionOnly"
-        }
-    }
-
-    var symbolName: String {
-        switch self {
-        case .restrictedWeb: "checkmark.circle.fill"
-        case .dedicatedRuntime: "shippingbox.circle.fill"
-        case .detectionOnly: "magnifyingglass.circle"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .restrictedWeb: .green
-        case .dedicatedRuntime: .blue
-        case .detectionOnly: .orange
-        }
     }
 }

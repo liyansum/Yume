@@ -17,9 +17,9 @@ xcuserdata/
 .env
 .env.*
 !.env.example
-Diagnostics/
-Staging/
-Application Support/
+/Diagnostics/
+/Staging/
+/Application Support/
 
 # Editor and temporary files
 .idea/

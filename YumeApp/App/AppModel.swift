@@ -63,6 +63,9 @@ final class AppModel {
     private(set) var duplicateChoice: DuplicateChoice?
     private(set) var diagnosticEntryCount = 0
     private(set) var diagnosticExportURL: URL?
+    private(set) var recoveredTasks: [StagingManifest] = []
+    private(set) var diagnosticEntries: [DiagnosticEntry] = []
+    private(set) var isPlaybackSuspended = false
 
     init(
         library: any GameLibrary,
@@ -121,6 +124,7 @@ final class AppModel {
         guard !hasLoaded else { return }
         if let report = try? await importer.recoverInterruptedTasks() {
             recoveryIssueCount = report.issues.count
+            recoveredTasks = report.recovered
         }
         await refreshDiagnostics()
         await reloadLibrary()
@@ -244,6 +248,10 @@ final class AppModel {
         importNotice = nil
     }
 
+    func dismissRecoveredTasks() {
+        recoveredTasks = []
+    }
+
     func chooseDetection(_ result: ProbeResult) {
         guard detectionChoice?.candidates.contains(result) == true else { return }
         detectionChoice = nil
@@ -295,6 +303,14 @@ final class AppModel {
         playbackFailed = false
     }
 
+    func suspendPlayback() {
+        isPlaybackSuspended = true
+    }
+
+    func resumePlayback() {
+        isPlaybackSuspended = false
+    }
+
     func stopPlaying(markAsPlayed: Bool = true) async {
         let stoppedGameID = await playSessions.stop()
         activeGame = nil
@@ -336,6 +352,7 @@ final class AppModel {
 
     func refreshDiagnostics() async {
         let entries = try? await diagnostics.recentEntries(limit: 2_000)
+        diagnosticEntries = entries ?? []
         diagnosticEntryCount = entries?.count ?? 0
     }
 
