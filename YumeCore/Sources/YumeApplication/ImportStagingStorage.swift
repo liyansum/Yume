@@ -14,6 +14,7 @@ public struct StagingWorkspace: Sendable, Equatable {
 public protocol ImportStagingStorage: Sendable {
     func prepareStorage() async throws
     func stagingTaskIDs() async throws -> [ImportTaskID]
+    func containsStagingTask(id: ImportTaskID) async throws -> Bool
     func createStagingTask(id: ImportTaskID, createdAt: Date) async throws -> StagingWorkspace
     func loadManifest(for id: ImportTaskID) async throws -> StagingManifest
     func registerOwnedPath(

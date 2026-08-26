@@ -102,14 +102,22 @@ public actor LocalGameStorage: ImportStagingStorage {
                 throw StorageError.unexpectedStagingEntry(entry.lastPathComponent)
             }
 
-            let taskID = ImportTaskID(rawValue: uuid)
-            _ = try await loadManifest(for: taskID)
-            taskIDs.append(taskID)
+            taskIDs.append(ImportTaskID(rawValue: uuid))
         }
 
         return taskIDs.sorted {
             $0.rawValue.uuidString < $1.rawValue.uuidString
         }
+    }
+
+    public func containsStagingTask(id: ImportTaskID) async throws -> Bool {
+        let taskRoot = taskRootURL(for: id)
+        guard fileManager.fileExists(atPath: taskRoot.path) else { return false }
+
+        try validateExistingManagedDirectory(layout.root)
+        try validateExistingManagedDirectory(layout.staging)
+        try validateExistingManagedDirectory(taskRoot)
+        return true
     }
 
     public func loadManifest(for id: ImportTaskID) async throws -> StagingManifest {

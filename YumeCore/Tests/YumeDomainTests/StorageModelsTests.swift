@@ -44,4 +44,15 @@ final class StorageModelsTests: XCTestCase {
 
         XCTAssertThrowsError(try JSONDecoder().decode(StorageRelativePath.self, from: data))
     }
+
+    func testInvalidTerminalStateCannotBeDecodedFromManifest() throws {
+        let invalidManifest = StagingManifest(
+            taskID: ImportTaskID(),
+            state: .failed(code: "  "),
+            createdAt: .distantPast
+        )
+        let data = try JSONEncoder().encode(invalidManifest)
+
+        XCTAssertThrowsError(try JSONDecoder().decode(StagingManifest.self, from: data))
+    }
 }

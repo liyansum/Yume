@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RootView: View {
-    enum Section: String, CaseIterable, Identifiable {
+    enum Section: String, CaseIterable, Hashable, Identifiable {
         case library
         case settings
 

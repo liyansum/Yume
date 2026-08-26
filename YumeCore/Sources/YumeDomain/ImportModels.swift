@@ -14,7 +14,7 @@ public struct ImportTaskID: RawRepresentable, Codable, Hashable, Sendable, Ident
     }
 }
 
-public enum ImportStage: String, Codable, CaseIterable, Sendable {
+public enum ImportStage: String, Codable, CaseIterable, Hashable, Sendable {
     case picked
     case validatingSource
     case budgeting

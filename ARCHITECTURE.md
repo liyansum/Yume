@@ -103,7 +103,7 @@ YumeApp/
 YumeCore/
 ├── Sources/
 │   ├── YumeDomain/              # 已实现首批游戏、引擎、导入状态、staging manifest 值类型
-│   ├── YumeApplication/         # 已实现资料库查询与导入 staging 存储协议
+│   ├── YumeApplication/         # 已实现资料库查询、导入协调器与 staging 存储协议
 │   ├── YumeInfrastructure/      # 已实现内存资料库、安全存储根和文件 manifest；索引仍为计划能力
 │   └── YumeEngineHost/          # 已实现首版宿主协议骨架
 ├── Tests/                       # 已实现领域模型与资料库查询单元测试
@@ -179,7 +179,9 @@ picked
   → committed
 ```
 
-任一阶段可进入 `paused`、`cancelled` 或 `failed`。只有 `validatingCommit` 成功后才能将同卷 staging 原子移动到正式资料库；失败、取消或空间不足时只按任务 manifest 清理本任务未提交文件。App 被终止后依据 checkpoint 恢复，无法证明安全时执行有边界的清理。
+原子提交前任一阶段可进入 `paused`、`cancelled` 或 `failed`；已进入 `committed` 后只能暂停核对或完成。只有 `validatingCommit` 成功后才能将同卷 staging 原子移动到正式资料库；失败、取消或空间不足时只按任务 manifest 清理本任务未提交文件。App 被终止后依据 checkpoint 恢复，无法证明安全时执行有边界的清理。
+
+当前已实现纯 `ImportStateMachine` 与 actor `ImportCoordinator`：合法分支由显式邻接规则控制，重复 pause/resume/同阶段推进不重复写 checkpoint；取消、失败和完成先持久化终态再幂等清理 staging。启动发现 active 任务时先写为同阶段 paused，调用方重新验证输入、空间和配方后才能 resume；损坏 manifest、checkpoint 写入失败或终态清理失败逐任务报告并保留数据。`committed` 表示已经越过原子提交点，此后禁止普通取消/失败，只能暂停核对后完成，避免把已提交游戏当作未提交数据处理。
 
 只自动展开用户选择的顶层 ZIP/7z，不递归展开其中的通用归档。一个归档发现多个游戏根目录时，每个候选形成独立提交单元。
 

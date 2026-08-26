@@ -34,7 +34,7 @@ public struct EngineDescriptor: Codable, Hashable, Sendable {
     }
 }
 
-public enum CompatibilityStatus: String, Codable, CaseIterable, Sendable {
+public enum CompatibilityStatus: String, Codable, CaseIterable, Hashable, Sendable {
     case runnable
     case conversionRequired
     case partiallyCompatible

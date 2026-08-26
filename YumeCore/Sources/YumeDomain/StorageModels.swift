@@ -84,6 +84,40 @@ public struct StagingManifest: Codable, Equatable, Sendable {
         self.ownedPaths = Self.uniqued(ownedPaths)
     }
 
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let formatVersion = try container.decode(Int.self, forKey: .formatVersion)
+        let taskID = try container.decode(ImportTaskID.self, forKey: .taskID)
+        let state = try container.decode(ImportState.self, forKey: .state)
+        let createdAt = try container.decode(Date.self, forKey: .createdAt)
+        let updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        let ownedPaths = try container.decode([StorageRelativePath].self, forKey: .ownedPaths)
+
+        do {
+            switch state {
+            case let .failed(code):
+                try ImportStateMachine.validate(action: .fail(code: code))
+            case let .completed(gameIDs):
+                try ImportStateMachine.validate(action: .complete(gameIDs: gameIDs))
+            case .active(_), .paused(_), .cancelled:
+                break
+            }
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: container,
+                debugDescription: "Invalid persisted import state"
+            )
+        }
+
+        self.formatVersion = formatVersion
+        self.taskID = taskID
+        self.state = state
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.ownedPaths = Self.uniqued(ownedPaths)
+    }
+
     public mutating func registerOwnedPath(_ path: StorageRelativePath, at date: Date) {
         guard !ownedPaths.contains(path) else { return }
         ownedPaths.append(path)
@@ -98,5 +132,14 @@ public struct StagingManifest: Codable, Equatable, Sendable {
     private static func uniqued(_ paths: [StorageRelativePath]) -> [StorageRelativePath] {
         var seen: Set<StorageRelativePath> = []
         return paths.filter { seen.insert($0).inserted }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion
+        case taskID
+        case state
+        case createdAt
+        case updatedAt
+        case ownedPaths
     }
 }

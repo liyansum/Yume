@@ -58,7 +58,7 @@ final class LocalGameStorageTests: XCTestCase {
         XCTAssertEqual(manifest.state, .paused(stage: .copyingToStaging))
     }
 
-    func testStagingTaskDiscoveryReturnsValidatedStableOrder() async throws {
+    func testStagingTaskDiscoveryReturnsStableOrder() async throws {
         let fixture = try TemporaryStorageFixture()
         defer { fixture.remove() }
         let storage = LocalGameStorage(baseURL: fixture.storageRoot)

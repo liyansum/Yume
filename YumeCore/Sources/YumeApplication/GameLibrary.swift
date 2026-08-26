@@ -4,7 +4,7 @@ public protocol GameLibrary: Sendable {
     func allGames() async throws -> [ImportedGame]
 }
 
-public enum LibrarySort: String, CaseIterable, Codable, Sendable {
+public enum LibrarySort: String, CaseIterable, Codable, Hashable, Sendable {
     case recentlyPlayed
     case title
     case recentlyImported
