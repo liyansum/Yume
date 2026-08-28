@@ -49,6 +49,12 @@ let package = Package(
             name: "YumeEngineHost",
             dependencies: ["YumeDomain", "CYumeRuntimeBridge"]
         ),
+        .target(
+            name: "CYumeRuntimeProviderStubs",
+            dependencies: ["CYumeRuntimeBridge"],
+            path: "Tests/CYumeRuntimeProviderStubs",
+            publicHeadersPath: "include"
+        ),
         .testTarget(
             name: "YumeDomainTests",
             dependencies: ["YumeDomain"]
@@ -68,7 +74,7 @@ let package = Package(
         ),
         .testTarget(
             name: "YumeEngineHostTests",
-            dependencies: ["YumeEngineHost", "YumeDomain"]
+            dependencies: ["YumeEngineHost", "YumeDomain", "CYumeRuntimeProviderStubs"]
         )
     ]
 )
