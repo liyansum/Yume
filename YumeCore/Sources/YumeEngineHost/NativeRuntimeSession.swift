@@ -105,7 +105,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
 #if canImport(UIKit)
     @MainActor
     public func nativeView() -> UIView? {
-        guard let pointer = withHandle({ yume_runtime_session_native_view($0) }) else {
+        guard let pointer = withHandle({ yume_runtime_session_native_view($0) }).flatMap({ $0 }) else {
             return nil
         }
         return Unmanaged<UIView>.fromOpaque(pointer).takeUnretainedValue()
