@@ -201,18 +201,20 @@ public struct SafeZIPExtractor: Sendable {
         guard sourceURL.isFileURL else { throw SafeZIPError.sourceIsNotFileURL }
         let values = try sourceURL.resourceValues(forKeys: [
             .isRegularFileKey,
-            .isSymbolicLinkKey,
-            .fileSizeKey
+            .isSymbolicLinkKey
         ])
         guard values.isSymbolicLink != true else { throw SafeZIPError.sourceIsSymbolicLink }
-        guard values.isRegularFile == true, let integerFileSize = values.fileSize else {
+        guard values.isRegularFile == true else {
             throw SafeZIPError.sourceMissing
         }
-        let fileSize = UInt64(integerFileSize)
-        guard fileSize >= 22 else { throw SafeZIPError.invalidArchive }
 
         let handle = try FileHandle(forReadingFrom: sourceURL)
         defer { try? handle.close() }
+        // URL resource values are cached on Darwin and can report the previous
+        // length when an archive is replaced at the same path. The open handle
+        // is authoritative for all bounds checks performed below.
+        let fileSize = try handle.seekToEnd()
+        guard fileSize >= 22 else { throw SafeZIPError.invalidArchive }
         let endRecord = try findEndRecord(handle: handle, fileSize: fileSize)
         let directory = try readCentralDirectoryLocation(
             endRecord: endRecord,

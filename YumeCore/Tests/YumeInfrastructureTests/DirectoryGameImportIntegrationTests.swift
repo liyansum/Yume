@@ -156,6 +156,10 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         defer { fixture.remove() }
         try fixture.makeMZGame()
         try fixture.write("duplicate", to: "DATA/system.json")
+        let rootNames = try FileManager.default.contentsOfDirectory(atPath: fixture.sourceRoot.path)
+        guard rootNames.contains("data"), rootNames.contains("DATA") else {
+            throw XCTSkip("The test volume is case-insensitive and cannot represent both paths")
+        }
         let storage = makeStorage(for: fixture)
 
         do {
