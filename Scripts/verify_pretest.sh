@@ -103,7 +103,10 @@ for language, keys in key_sets.items():
         raise SystemExit(f"Localization keys differ for {language}: missing={missing}, extra={extra}")
 PY
 
-mapfile -t swift_sources < <(find YumeApp YumeCore/Sources YumeCore/Tests -type f -name '*.swift' | LC_ALL=C sort)
+swift_sources=()
+while IFS= read -r swift_source; do
+    swift_sources+=("$swift_source")
+done < <(find YumeApp YumeCore/Sources YumeCore/Tests -type f -name '*.swift' | LC_ALL=C sort)
 "$swiftc_bin" -frontend -parse "${swift_sources[@]}"
 "$swift_bin" test --package-path YumeCore
 git diff --check
