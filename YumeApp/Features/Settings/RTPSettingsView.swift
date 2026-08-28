@@ -8,7 +8,7 @@ struct RTPSettingsView: View {
 
     @State private var presentsEngineMenu = false
     @State private var presentsImporter = false
-    @State private var selectedEngine: EngineCatalogEntry?
+    @State private var selectedEngine: GameEngineCatalogEntry?
     @State private var removalCandidate: RTPPackage?
     @State private var operationFailed = false
 
@@ -135,10 +135,15 @@ struct RTPSettingsView: View {
         .listStyle(.insetGrouped)
     }
 
-    private func defaultEngine() -> EngineCatalogEntry? {
-        model.engineCatalog.entries.first {
-            $0.descriptor.id.rawValue == "rgss"
-        } ?? model.engineCatalog.entries.first
+    private var removalBinding: Binding<Bool> {
+        Binding(
+            get: { removalCandidate != nil },
+            set: { presented in
+                if !presented {
+                    removalCandidate = nil
+                }
+            }
+        )
     }
 
     private func sanitize(_ value: String) -> String {

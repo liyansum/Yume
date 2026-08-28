@@ -246,7 +246,7 @@ private struct LicensesView: View {
                 Text("licenses.app.message")
             }
             Section("licenses.thirdparty.title") {
-                ForEach(bundledNotices) { notice in
+                ForEach(bundledNotices, id: \.id) { notice in
                     VStack(alignment: .leading, spacing: 4) {
                         Text(notice.name)
                             .font(.subheadline.weight(.medium))

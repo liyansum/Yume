@@ -268,9 +268,9 @@ struct LibraryView: View {
     private var importAlertTitle: LocalizedStringKey {
         guard let notice = model.importNotice else { return "import.result.failure.title" }
         switch notice.kind {
-        case .success: "import.result.success.title"
-        case .partialSuccess: "import.result.partial.title"
-        case .failure: "import.result.failure.title"
+        case .success: return "import.result.success.title"
+        case .partialSuccess: return "import.result.partial.title"
+        case .failure: return "import.result.failure.title"
         }
     }
 
@@ -278,9 +278,9 @@ struct LibraryView: View {
         guard let notice = model.importNotice else { return "import.failure.unreadable" }
         switch notice.kind {
         case .success:
-            "import.result.success.message"
+            return "import.result.success.message"
         case .partialSuccess(_, let failure), .failure(let failure):
-            failure.localizedKey
+            return failure.localizedKey
         }
     }
 }

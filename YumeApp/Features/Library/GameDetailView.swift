@@ -174,7 +174,7 @@ private struct GameRemovalView: View {
                     }
                 }
 
-                Section("game.delete.saves.title") {
+                Section {
                     Picker("game.delete.saves.choice", selection: $policy) {
                         Text("game.delete.saves.preserve").tag(GameRemovalPolicy.preserveSaves)
                         Text("game.delete.saves.delete").tag(GameRemovalPolicy.deleteSaves)
@@ -189,6 +189,8 @@ private struct GameRemovalView: View {
                             ShareLink("game.saves.share", item: exportedSaveURL)
                         }
                     }
+                } header: {
+                    Text("game.delete.saves.title")
                 } footer: {
                     Text(removalMessage)
                 }
