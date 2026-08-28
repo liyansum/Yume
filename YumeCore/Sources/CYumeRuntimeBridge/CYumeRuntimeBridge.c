@@ -3,16 +3,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__GNUC__) || defined(__clang__)
-#define YUME_WEAK __attribute__((weak))
+#if defined(__APPLE__)
+#define YUME_WEAK_IMPORT __attribute__((weak_import))
+#elif defined(__GNUC__) || defined(__clang__)
+#define YUME_WEAK_IMPORT __attribute__((weak))
 #else
-#define YUME_WEAK
+#define YUME_WEAK_IMPORT
 #endif
 
-extern const YumeRuntimeProviderAPI *yume_mkxp_runtime_provider(void) YUME_WEAK;
-extern const YumeRuntimeProviderAPI *yume_aetherkiri_onscripter_runtime_provider(void) YUME_WEAK;
-extern const YumeRuntimeProviderAPI *yume_aetherkiri_kirikiri_runtime_provider(void) YUME_WEAK;
-extern const YumeRuntimeProviderAPI *yume_renios_runtime_provider(void) YUME_WEAK;
+extern const YumeRuntimeProviderAPI *yume_mkxp_runtime_provider(void) YUME_WEAK_IMPORT;
+extern const YumeRuntimeProviderAPI *yume_aetherkiri_onscripter_runtime_provider(void) YUME_WEAK_IMPORT;
+extern const YumeRuntimeProviderAPI *yume_aetherkiri_kirikiri_runtime_provider(void) YUME_WEAK_IMPORT;
+extern const YumeRuntimeProviderAPI *yume_renios_runtime_provider(void) YUME_WEAK_IMPORT;
 
 struct YumeRuntimeSession {
     const YumeRuntimeProviderAPI *api;
