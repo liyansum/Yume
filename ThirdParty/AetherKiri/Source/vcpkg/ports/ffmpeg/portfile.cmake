@@ -71,7 +71,15 @@ if(VCPKG_DETECTED_CMAKE_C_COMPILER)
     get_filename_component(CC_filename "${VCPKG_DETECTED_CMAKE_C_COMPILER}" NAME)
     set(ENV{CC} "${CC_filename}")
     string(APPEND OPTIONS " --cc=${CC_filename}")
-    if(VCPKG_CMAKE_SYSTEM_NAME STREQUAL "Android")
+    if(VCPKG_TARGET_IS_IOS)
+        execute_process(
+            COMMAND /usr/bin/xcrun --sdk macosx --show-sdk-path
+            OUTPUT_VARIABLE FFMPEG_HOST_SDK
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+        string(APPEND OPTIONS " --host_cc=\"${CC_filename} -isysroot ${FFMPEG_HOST_SDK}\"")
+    elseif(VCPKG_CMAKE_SYSTEM_NAME STREQUAL "Android")
         if(VCPKG_HOST_IS_OSX)
             set(FFMPEG_HOST_CC "/usr/bin/clang")
             if(NOT EXISTS "${FFMPEG_HOST_CC}")
@@ -247,6 +255,7 @@ if (VCPKG_TARGET_IS_IOS)
     endif ()
 
     set(OPTIONS "${OPTIONS} --extra-cflags=--target=${vcpkg_target_arch}-apple-ios${vcpkg_osx_deployment_target}${simulator}")
+    set(OPTIONS "${OPTIONS} --extra-cxxflags=--target=${vcpkg_target_arch}-apple-ios${vcpkg_osx_deployment_target}${simulator}")
     set(OPTIONS "${OPTIONS} --extra-ldflags=--target=${vcpkg_target_arch}-apple-ios${vcpkg_osx_deployment_target}${simulator}")
 
     set(vcpkg_osx_sysroot "${VCPKG_OSX_SYSROOT}")
@@ -278,6 +287,7 @@ if (VCPKG_TARGET_IS_IOS)
         endif ()
     endif ()
     set(OPTIONS "${OPTIONS} --extra-cflags=-isysroot\"${vcpkg_osx_sysroot}\"")
+    set(OPTIONS "${OPTIONS} --extra-cxxflags=-isysroot\"${vcpkg_osx_sysroot}\"")
     set(OPTIONS "${OPTIONS} --extra-ldflags=-isysroot\"${vcpkg_osx_sysroot}\"")
 endif ()
 
