@@ -231,9 +231,11 @@ static int32_t RenPyStart(void *opaque) {
     std::string executable = launcher.UTF8String;
     dispatch_async(dispatch_get_main_queue(), ^{
         SDL_SetMainReady();
+        std::string executableArgument = executable;
+        std::string baseDirectoryOption = "--basedir";
         std::string content = session->contentRoot;
         char *arguments[] = {
-            executable.data(), const_cast<char *>("--basedir"), content.data(), nullptr
+            executableArgument.data(), baseDirectoryOption.data(), content.data(), nullptr
         };
         int result = session->generation == RenPyGeneration::Modern
             ? yume_renpy_modern_main(3, arguments)
