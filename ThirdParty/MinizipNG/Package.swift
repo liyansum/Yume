@@ -18,7 +18,7 @@ let package = Package(
                 .define("ZLIB_COMPAT"),
                 .define("HAVE_PKCRYPT"),
                 .define("HAVE_WZAES"),
-                .define("_POSIX_C_SOURCE", to: "200809L"),
+                .define("_POSIX_C_SOURCE", to: "200809L", .when(platforms: [.linux])),
                 .define("_DEFAULT_SOURCE", .when(platforms: [.linux])),
                 // The Linux development image exposes its OpenSSL 3 headers
                 // through the Node toolchain. Apple builds use CommonCrypto.
