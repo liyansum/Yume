@@ -63,6 +63,10 @@ fi
 unset SDKROOT CC CXX LD AR AS NM RANLIB STRIP
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 unset IPHONEOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
+# Apple clang is invoked directly by vcpkg's host triplet and Xcode 26 no
+# longer infers the platform SDK in that form. The target triplet and explicit
+# CMAKE_OSX_SYSROOT below still select iPhoneOS for target libraries.
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
 mkdir -p "$(dirname "$vcpkg_root")" "$artifact_dir"
 if [[ ! -f "$vcpkg_root/.vcpkg-root" ]]; then

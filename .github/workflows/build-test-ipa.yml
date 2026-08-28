@@ -37,6 +37,10 @@ jobs:
           xcodebuild -version
           swift --version
           cmake --version
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+          ninja --version
           df -h .
 
       - name: Restore native download cache
