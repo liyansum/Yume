@@ -52,7 +52,10 @@ done
 require_symbol() {
     local artifact="$1"
     local symbol="$2"
-    if ! xcrun nm "$artifact" 2>/dev/null | grep -Eq "[[:space:]]_$symbol$"; then
+    # Do not use grep -q here. With pipefail and a large merged archive, an
+    # early grep exit sends SIGPIPE to nm and turns a successful match into a
+    # failed pipeline. -gUj also limits the check to defined global symbols.
+    if ! xcrun nm -gUj "$artifact" 2>/dev/null | grep -Fx "_$symbol" >/dev/null; then
         echo "Required native symbol _$symbol is missing from $artifact" >&2
         exit 4
     fi
