@@ -49,10 +49,11 @@ jobs:
         with:
           path: |
             .native-build/downloads
-            .native-build/vcpkg/downloads
+            .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
           restore-keys: |
+            yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-
             yume-native-cache-v3-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run pre-test gate
@@ -81,9 +82,9 @@ jobs:
         with:
           path: |
             .native-build/downloads
-            .native-build/vcpkg/downloads
+            .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
 
       - name: Package IPA
         run: |

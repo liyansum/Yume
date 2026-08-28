@@ -48,6 +48,7 @@ artifact_dir="$project_root/ThirdParty/AetherKiri/Artifacts/$platform_name"
 artifact="$artifact_dir/libYumeAetherKiri.a"
 build_root="$project_root/.native-build/aetherkiri/${platform_name}-${architecture}"
 vcpkg_root="${YUME_VCPKG_ROOT:-$project_root/.native-build/vcpkg}"
+vcpkg_downloads="${VCPKG_DOWNLOADS:-$project_root/.native-build/vcpkg-downloads}"
 
 if [[ -f "$artifact" ]] &&
    ! find "$source_root" -type f -newer "$artifact" -print -quit | grep -q .; then
@@ -69,6 +70,15 @@ unset IPHONEOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
 export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
 mkdir -p "$(dirname "$vcpkg_root")" "$artifact_dir"
+# v3 CI caches stored downloads below the Git checkout. Restore that cache
+# into the new sibling location before validating/cloning the vcpkg root.
+if [[ ! -f "$vcpkg_root/.vcpkg-root" && -d "$vcpkg_root/downloads" ]]; then
+    unexpected_entry="$(find "$vcpkg_root" -mindepth 1 -maxdepth 1 ! -name downloads -print -quit)"
+    if [[ -z "$unexpected_entry" && ! -e "$vcpkg_downloads" ]]; then
+        mv "$vcpkg_root/downloads" "$vcpkg_downloads"
+        rmdir "$vcpkg_root"
+    fi
+fi
 if [[ ! -f "$vcpkg_root/.vcpkg-root" ]]; then
     if [[ -e "$vcpkg_root" ]]; then
         echo "Invalid VCPKG root: $vcpkg_root" >&2
@@ -84,8 +94,9 @@ if [[ ! -x "$vcpkg_root/vcpkg" ]]; then
 fi
 
 export VCPKG_ROOT="$vcpkg_root"
+export VCPKG_DOWNLOADS="$vcpkg_downloads"
 export VCPKG_DEFAULT_BINARY_CACHE="${VCPKG_DEFAULT_BINARY_CACHE:-$project_root/.native-build/vcpkg-binary-cache}"
-mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
+mkdir -p "$VCPKG_DOWNLOADS" "$VCPKG_DEFAULT_BINARY_CACHE"
 cmake -S "$source_root" -B "$build_root" --fresh \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
