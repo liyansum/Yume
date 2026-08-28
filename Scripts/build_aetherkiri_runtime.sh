@@ -149,6 +149,19 @@ runtime_archives=()
 while IFS= read -r archive; do
     runtime_archives+=("$archive")
 done < "$archive_list"
+
+# vcpkg packages static libtiff as a framework on iOS. Its binary has no .a
+# suffix, so include it explicitly alongside the archives discovered above.
+tiff_framework_binary="$build_root/vcpkg_installed/$triplet/lib/tiff.framework/tiff"
+if [[ ! -f "$tiff_framework_binary" ]]; then
+    tiff_framework_binary="$build_root/vcpkg_installed/$triplet/lib/TIFF.framework/TIFF"
+fi
+if [[ ! -f "$tiff_framework_binary" ]]; then
+    echo "AetherKiri libtiff framework binary is missing." >&2
+    exit 3
+fi
+runtime_archives+=("$tiff_framework_binary")
+
 xcrun libtool -static -o "$temporary_artifact" "${runtime_archives[@]}"
 xcrun lipo "$temporary_artifact" -verify_arch "$architecture"
 mv "$temporary_artifact" "$artifact"

@@ -20,6 +20,24 @@ extern "C" bool TVPGodotLive2DRenderToLayer(iTJSDispatch2 *layerDispatch)
     __attribute__((weak));
 #endif
 
+// Public-build fallbacks for hooks supplied by the optional private
+// compatibility packages. The structured TJS/NS0 decoder is available in
+// the public tree, while virtual atlas, SliceLayer and PSD extensions degrade
+// safely when their implementations are not bundled.
+#if !defined(AETHERKIRI_INTERNAL_KRKR2_PLUGIN)
+extern "C" void TVPRegisterTjsNs0DataPackLoader();
+extern "C" void TVPRegisterDataPackCompatPluginAnchor() {
+    TVPRegisterTjsNs0DataPackLoader();
+}
+extern "C" void TVPRegisterSliceLayerCompat() {}
+extern "C" void TVPPreparePackinOneVirtualResources(
+    const ttstr &, const tTJSVariant &) {}
+#endif
+
+#if !defined(AETHERKIRI_HAS_PSDFILE)
+extern "C" void TVPRegisterPSDPluginAnchor() {}
+#endif
+
 // Stub modules — register empty entries so Plugins.link() succeeds.
 // The engine already has built-in support for the functionality these
 // plugins originally provided, but some games explicitly link them by name.

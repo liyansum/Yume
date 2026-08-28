@@ -159,6 +159,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 #        json steam DrawDeviceForSteam
 )
 if(AETHERKIRI_HAS_PSDFILE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE AETHERKIRI_HAS_PSDFILE=1)
     target_link_libraries(${PROJECT_NAME} PUBLIC psdfile)
 endif()
 if(NOT WEB AND NOT EMSCRIPTEN)
