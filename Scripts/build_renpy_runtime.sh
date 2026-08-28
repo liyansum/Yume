@@ -83,7 +83,7 @@ build_generation() {
         "$wrapper" "${archives[@]}" -o "$output.unstripped"
     printf '_%s\n' "$entry" > "$exports"
     xcrun nmedit -s "$exports" "$output.unstripped" -o "$output"
-    xcrun lipo -verify_arch arm64 "$output"
+    xcrun lipo "$output" -verify_arch arm64
 
     local visible_symbols
     visible_symbols="$(xcrun nm -gUj "$output" | LC_ALL=C sort -u)"

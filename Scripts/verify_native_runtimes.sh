@@ -41,7 +41,7 @@ artifacts=(
 )
 for artifact in "${artifacts[@]}"; do
     [[ -s "$artifact" ]] || { echo "Native runtime artifact is missing: $artifact" >&2; exit 3; }
-    xcrun lipo -verify_arch arm64 "$artifact"
+    xcrun lipo "$artifact" -verify_arch arm64
 done
 
 require_symbol() {

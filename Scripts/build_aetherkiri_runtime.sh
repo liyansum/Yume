@@ -127,6 +127,6 @@ while IFS= read -r archive; do
     runtime_archives+=("$archive")
 done < "$archive_list"
 xcrun libtool -static -o "$temporary_artifact" "${runtime_archives[@]}"
-xcrun lipo -verify_arch "$architecture" "$temporary_artifact"
+xcrun lipo "$temporary_artifact" -verify_arch "$architecture"
 mv "$temporary_artifact" "$artifact"
 echo "Built AetherKiri runtime: $artifact"
