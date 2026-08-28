@@ -34,6 +34,14 @@ int32_t yume_zlib_inflate_to_file(
     uint64_t expected_size
 );
 
+int32_t yume_deflate_raw_to_file(
+    const char *input_path,
+    uint64_t data_offset,
+    uint64_t compressed_size,
+    const char *output_path,
+    uint64_t expected_size
+);
+
 int32_t yume_zlib_inflate_mem(
     const unsigned char *input_buffer,
     uint64_t compressed_size,

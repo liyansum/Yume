@@ -4,6 +4,9 @@ import YumeDomain
 public enum LaunchKind: Equatable, Sendable {
     /// Runs in the restricted WKWebView shell.
     case web
+    /// Runs a bundled, engine-specific WebAssembly/JavaScript runtime in the
+    /// same offline WKWebView policy as web-native games.
+    case embeddedWebRuntime(runtimeIdentifier: String)
     /// Requires a statically linked upstream runtime (ADR-0053).
     case hostedRuntime(runtimeIdentifier: String)
     /// No runtime path exists for this engine yet.
@@ -60,23 +63,23 @@ public enum GameLaunchAdapters {
             ),
             SimpleLaunchAdapter(
                 engineID: "onscripter",
-                kind: .hostedRuntime(runtimeIdentifier: "onscripter"),
-                runtimeVersionLabel: "ONScripter"
+                kind: .hostedRuntime(runtimeIdentifier: "aetherkiri-onscripter"),
+                runtimeVersionLabel: "AetherKiri / OnscripterYuri"
             ),
             SimpleLaunchAdapter(
                 engineID: "kirikiri",
-                kind: .hostedRuntime(runtimeIdentifier: "krkrsdl2"),
-                runtimeVersionLabel: "krkrsdl2"
+                kind: .hostedRuntime(runtimeIdentifier: "aetherkiri-kirikiri"),
+                runtimeVersionLabel: "AetherKiri 0.5"
             ),
             SimpleLaunchAdapter(
                 engineID: "flash",
-                kind: .hostedRuntime(runtimeIdentifier: "ruffle"),
-                runtimeVersionLabel: "Ruffle"
+                kind: .embeddedWebRuntime(runtimeIdentifier: "ruffle-web"),
+                runtimeVersionLabel: "Ruffle Web"
             ),
             SimpleLaunchAdapter(
                 engineID: "renpy",
-                kind: .notPlanned(reasonCode: "runtime.renpy.evaluation"),
-                runtimeVersionLabel: "Ren'Py"
+                kind: .hostedRuntime(runtimeIdentifier: "renios"),
+                runtimeVersionLabel: "Ren'Py iOS"
             )
         ]
     }

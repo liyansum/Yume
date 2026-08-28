@@ -21,14 +21,26 @@ public struct StagedSourceSummary: Sendable, Equatable {
 }
 
 public protocol GameImportStorage: ImportStagingStorage {
+    func readFileHead(
+        for taskID: ImportTaskID,
+        relativePath: StorageRelativePath,
+        byteCount: Int
+    ) async throws -> Data
     func validateDirectorySource(at sourceURL: URL) async throws -> StorageBudget
-    func validateZIPSource(at sourceURL: URL) async throws -> StorageBudget
+    func validateZIPSource(at sourceURL: URL, password: String?) async throws -> StorageBudget
+    func validate7zSource(at sourceURL: URL, password: String?) async throws -> StorageBudget
     func stageDirectory(
         at sourceURL: URL,
         for taskID: ImportTaskID
     ) async throws -> StagedSourceSummary
     func stageZIP(
         at sourceURL: URL,
+        password: String?,
+        for taskID: ImportTaskID
+    ) async throws -> StagedSourceSummary
+    func stage7z(
+        at sourceURL: URL,
+        password: String?,
         for taskID: ImportTaskID
     ) async throws -> StagedSourceSummary
     func detectionSnapshots(for taskID: ImportTaskID) async throws -> [DetectionSnapshot]
@@ -107,12 +119,29 @@ public actor DirectoryGameImportService {
 
     public func importZIP(
         at sourceURL: URL,
+        password: String? = nil,
         progress: ProgressHandler? = nil,
         resolveDetection: DetectionResolver? = nil,
         resolveDuplicate: DuplicateResolver? = nil
     ) async throws -> ImportedGame {
         try await importSource(
-            .zip,
+            .zip(password: password),
+            at: sourceURL,
+            progress: progress,
+            resolveDetection: resolveDetection,
+            resolveDuplicate: resolveDuplicate
+        )
+    }
+
+    public func import7z(
+        at sourceURL: URL,
+        password: String? = nil,
+        progress: ProgressHandler? = nil,
+        resolveDetection: DetectionResolver? = nil,
+        resolveDuplicate: DuplicateResolver? = nil
+    ) async throws -> ImportedGame {
+        try await importSource(
+            .sevenZip(password: password),
             at: sourceURL,
             progress: progress,
             resolveDetection: resolveDetection,
@@ -122,7 +151,8 @@ public actor DirectoryGameImportService {
 
     private enum SourceKind {
         case directory
-        case zip
+        case zip(password: String?)
+        case sevenZip(password: String?)
     }
 
     private func importSource(
@@ -143,8 +173,10 @@ public actor DirectoryGameImportService {
             switch sourceKind {
             case .directory:
                 budget = try await storage.validateDirectorySource(at: sourceURL)
-            case .zip:
-                budget = try await storage.validateZIPSource(at: sourceURL)
+            case let .zip(password):
+                budget = try await storage.validateZIPSource(at: sourceURL, password: password)
+            case let .sevenZip(password):
+                budget = try await storage.validate7zSource(at: sourceURL, password: password)
             }
 
             try await advance(taskID, to: .budgeting)
@@ -159,8 +191,18 @@ public actor DirectoryGameImportService {
             switch sourceKind {
             case .directory:
                 summary = try await storage.stageDirectory(at: sourceURL, for: taskID)
-            case .zip:
-                summary = try await storage.stageZIP(at: sourceURL, for: taskID)
+            case let .zip(password):
+                summary = try await storage.stageZIP(
+                    at: sourceURL,
+                    password: password,
+                    for: taskID
+                )
+            case let .sevenZip(password):
+                summary = try await storage.stage7z(
+                    at: sourceURL,
+                    password: password,
+                    for: taskID
+                )
             }
             var replacementGame: ImportedGame?
             if let duplicate = try await storage.game(
@@ -192,7 +234,7 @@ public actor DirectoryGameImportService {
                 throw GameImportError.noSupportedGameFound
             }
 
-            let selected: ProbeResult
+            var selected: ProbeResult
             if candidates.count == 1 {
                 selected = candidates[0]
             } else if let resolveDetection,
@@ -205,9 +247,19 @@ public actor DirectoryGameImportService {
             }
 
             try await advance(taskID, to: .scanningCompatibility)
-            guard selected.compatibility.status != .unsupported else {
-                throw GameImportError.unsupportedGame(selected.compatibility)
+            let importStorage = storage
+            let magicIssues = await DetectionMagic.verify(selected) { path, byteCount in
+                try await importStorage.readFileHead(
+                    for: taskID,
+                    relativePath: path,
+                    byteCount: byteCount
+                )
             }
+            let hardened = DetectionMagic.hardened(selected, issues: magicIssues)
+            guard hardened.compatibility.status != .unsupported else {
+                throw GameImportError.unsupportedGame(hardened.compatibility)
+            }
+            selected = hardened
 
             let game = ImportedGame(
                 id: replacementGame?.id ?? GameID(),

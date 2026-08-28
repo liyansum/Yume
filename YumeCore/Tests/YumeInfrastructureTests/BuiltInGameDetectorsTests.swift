@@ -67,4 +67,14 @@ final class BuiltInGameDetectorsTests: XCTestCase {
             XCTAssertEqual(result.engine.id.rawValue, expectedID)
         }
     }
+
+    func testEveryDeclaredEngineFamilyIsRunnableInTheBundledBuild() {
+        let catalog = GameEngineCatalog(detectors: BuiltInGameDetectors.registry.detectors)
+        let expected = Set([
+            "renpy", "rgss", "rpg-maker-mv", "rpg-maker-mz", "onscripter",
+            "kirikiri", "flash", "tyranoscript"
+        ].map { EngineID(rawValue: $0) })
+
+        XCTAssertEqual(catalog.runnableEngineIDs, expected)
+    }
 }

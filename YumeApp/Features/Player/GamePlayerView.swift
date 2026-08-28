@@ -3,9 +3,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 import YumeApplication
 import YumeDomain
+import YumeEngineHost
 
 struct GamePlayerView: View {
-    let location: GameContentLocation
+    let session: GamePlaySession
     let suspended: Bool
     let onResume: () -> Void
     let onClose: () -> Void
@@ -19,12 +20,7 @@ struct GamePlayerView: View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
 
-            RestrictedWebGameView(
-                location: location,
-                suspended: suspended,
-                inputCommand: inputCommand,
-                loadFailed: $loadFailed
-            )
+            playerContent
                 .ignoresSafeArea()
 
             Button(action: onClose) {
@@ -64,6 +60,44 @@ struct GamePlayerView: View {
         .persistentSystemOverlays(.hidden)
     }
 
+    @ViewBuilder
+    private var playerContent: some View {
+        switch session.launchPlan.kind {
+        case .web:
+            RestrictedWebGameView(
+                location: session.content,
+                mode: .game,
+                suspended: suspended,
+                inputCommand: inputCommand,
+                loadFailed: $loadFailed
+            )
+        case let .embeddedWebRuntime(runtimeIdentifier):
+            if runtimeIdentifier == "ruffle-web",
+               let movie = session.content.runtimeEntryPoint,
+               let runtimeRoot = RuffleRuntimeResources.rootURL {
+                RestrictedWebGameView(
+                    location: session.content,
+                    mode: .ruffle(runtimeRoot: runtimeRoot, movie: movie),
+                    suspended: suspended,
+                    inputCommand: inputCommand,
+                    loadFailed: $loadFailed
+                )
+            } else {
+                RuntimeUnavailablePlayerView(loadFailed: $loadFailed)
+            }
+        case let .hostedRuntime(runtimeIdentifier):
+            NativeRuntimePlayerView(
+                playSession: session,
+                runtimeIdentifier: runtimeIdentifier,
+                suspended: suspended,
+                inputCommand: inputCommand,
+                loadFailed: $loadFailed
+            )
+        case .notPlanned:
+            RuntimeUnavailablePlayerView(loadFailed: $loadFailed)
+        }
+    }
+
     private var suspensionOverlay: some View {
         VStack(spacing: 14) {
             Label("player.suspended.title", systemImage: "pause.circle.fill")
@@ -83,6 +117,7 @@ struct GamePlayerView: View {
 
 private struct RestrictedWebGameView: UIViewRepresentable {
     let location: GameContentLocation
+    let mode: WebPlayerMode
     let suspended: Bool
     let inputCommand: WebInputCommand?
     @Binding var loadFailed: Bool
@@ -90,6 +125,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     static let mediaPauseFallbackScript = """
     document.querySelectorAll('video,audio').forEach(m => m.pause());
     """
+
+    static func lifecycleScript(suspended: Bool) -> String {
+        suspended
+            ? "window.dispatchEvent(new Event('blur')); document.dispatchEvent(new CustomEvent('yumepause'));"
+            : "window.dispatchEvent(new Event('focus')); document.dispatchEvent(new CustomEvent('yumeresume'));"
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(loadFailed: $loadFailed)
@@ -103,8 +144,19 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         let storageBridge = GameLocalStorageBridge(saveRootURL: location.saveRootURL)
         configuration.userContentController.add(storageBridge, name: GameLocalStorageBridge.messageName)
         configuration.userContentController.addUserScript(storageBridge.bootstrapScript())
+        let additionalRoots: [String: URL]
+        switch mode {
+        case .game:
+            additionalRoots = [:]
+        case let .ruffle(runtimeRoot, _):
+            additionalRoots = ["runtime": runtimeRoot]
+        }
         configuration.setURLSchemeHandler(
-            LocalGameSchemeHandler(gameID: location.game.id.rawValue, rootURL: location.rootURL),
+            LocalGameSchemeHandler(
+                gameID: location.game.id.rawValue,
+                rootURL: location.rootURL,
+                additionalRoots: additionalRoots
+            ),
             forURLScheme: LocalGameSchemeHandler.scheme
         )
 
@@ -117,17 +169,18 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
 
-        context.coordinator.installNetworkBlockerAndLoad(webView, location: location)
+        context.coordinator.installNetworkBlockerAndLoad(webView, location: location, mode: mode)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if suspended, !context.coordinator.didSuspendMediaPlayback {
-            context.coordinator.didSuspendMediaPlayback = true
-            webView.pauseAllMediaPlayback {}
-            webView.evaluateJavaScript(Self.mediaPauseFallbackScript)
-        } else if !suspended {
-            context.coordinator.didSuspendMediaPlayback = false
+        if suspended != context.coordinator.isSuspended {
+            context.coordinator.isSuspended = suspended
+            webView.setAllMediaPlaybackSuspended(suspended) {}
+            if suspended {
+                webView.evaluateJavaScript(Self.mediaPauseFallbackScript)
+            }
+            webView.evaluateJavaScript(Self.lifecycleScript(suspended: suspended))
         }
 
         guard let inputCommand, context.coordinator.lastInputCommandID != inputCommand.id else { return }
@@ -151,13 +204,17 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         @Binding private var loadFailed: Bool
         var lastInputCommandID: UUID?
-        var didSuspendMediaPlayback = false
+        var isSuspended = false
 
         init(loadFailed: Binding<Bool>) {
             _loadFailed = loadFailed
         }
 
-        func installNetworkBlockerAndLoad(_ webView: WKWebView, location: GameContentLocation) {
+        func installNetworkBlockerAndLoad(
+            _ webView: WKWebView,
+            location: GameContentLocation,
+            mode: WebPlayerMode
+        ) {
             let rules = """
             [{"trigger":{"url-filter":"^(https?|wss?|file)://"},"action":{"type":"block"}}]
             """
@@ -171,17 +228,40 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                         return
                     }
                     webView.configuration.userContentController.add(ruleList)
-                    self.load(webView, location: location)
+                    self.load(webView, location: location, mode: mode)
                 }
             }
         }
 
-        private func load(_ webView: WKWebView, location: GameContentLocation) {
-            let entry = location.entryPoint.rawValue.addingPercentEncoding(
-                withAllowedCharacters: .urlPathAllowed
-            ) ?? location.entryPoint.rawValue
+        private func load(
+            _ webView: WKWebView,
+            location: GameContentLocation,
+            mode: WebPlayerMode
+        ) {
             let host = location.game.id.rawValue.uuidString.lowercased()
-            guard let url = URL(string: "\(LocalGameSchemeHandler.scheme)://\(host)/\(entry)") else {
+            let url: URL?
+            switch mode {
+            case .game:
+                guard let entryPoint = location.webEntryPoint else {
+                    loadFailed = true
+                    return
+                }
+                let entry = entryPoint.rawValue.addingPercentEncoding(
+                    withAllowedCharacters: .urlPathAllowed
+                ) ?? entryPoint.rawValue
+                url = URL(string: "\(LocalGameSchemeHandler.scheme)://\(host)/\(entry)")
+            case let .ruffle(_, movie):
+                let moviePath = movie.rawValue.addingPercentEncoding(
+                    withAllowedCharacters: .urlPathAllowed
+                ) ?? movie.rawValue
+                let movieURL = "\(LocalGameSchemeHandler.scheme)://\(host)/\(moviePath)"
+                var components = URLComponents(
+                    string: "\(LocalGameSchemeHandler.scheme)://\(host)/runtime/index.html"
+                )
+                components?.queryItems = [URLQueryItem(name: "movie", value: movieURL)]
+                url = components?.url
+            }
+            guard let url else {
                 loadFailed = true
                 return
             }
@@ -215,9 +295,178 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     }
 }
 
+private enum WebPlayerMode: Equatable {
+    case game
+    case ruffle(runtimeRoot: URL, movie: StorageRelativePath)
+}
+
+private enum RuffleRuntimeResources {
+    static var rootURL: URL? {
+        let candidates = [
+            Bundle.main.resourceURL?
+                .appendingPathComponent("Runtimes", isDirectory: true)
+                .appendingPathComponent("Ruffle", isDirectory: true),
+            Bundle.main.url(forResource: "index", withExtension: "html")?.deletingLastPathComponent()
+        ].compactMap { $0 }
+        return candidates.first {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("ruffle.js").path)
+                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path)
+        }
+    }
+}
+
+private struct RuntimeUnavailablePlayerView: View {
+    @Binding var loadFailed: Bool
+
+    var body: some View {
+        Color.black
+            .task { loadFailed = true }
+    }
+}
+
+private struct NativeRuntimePlayerView: UIViewRepresentable {
+    let playSession: GamePlaySession
+    let runtimeIdentifier: String
+    let suspended: Bool
+    let inputCommand: WebInputCommand?
+    @Binding var loadFailed: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(loadFailed: $loadFailed)
+    }
+
+    func makeUIView(context: Context) -> UIView {
+        let container = UIView()
+        container.backgroundColor = .black
+        do {
+            let content = playSession.content
+            let prepared = PreparedGame(
+                gameID: content.game.id,
+                engineID: content.game.engine.id,
+                contentRootURL: content.rootURL,
+                saveRootURL: content.saveRootURL,
+                derivedRootURL: content.derivedRootURL,
+                logRootURL: content.logRootURL,
+                rtpMountRoots: playSession.rtpMountRoots
+            )
+            let runtime = try NativeRuntimeSession(
+                runtimeIdentifier: runtimeIdentifier,
+                game: prepared,
+                context: EngineContext(
+                    sessionID: playSession.id,
+                    localeIdentifier: Locale.current.identifier,
+                    networkingAllowed: false
+                )
+            )
+            context.coordinator.install(runtime: runtime, in: container)
+        } catch {
+            loadFailed = true
+        }
+        return container
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.setSuspended(suspended)
+        guard let inputCommand,
+              context.coordinator.lastInputCommandID != inputCommand.id,
+              let action = inputCommand.nativeAction
+        else { return }
+        context.coordinator.lastInputCommandID = inputCommand.id
+        context.coordinator.sendTap(action)
+    }
+
+    static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
+        coordinator.stop()
+        view.subviews.forEach { $0.removeFromSuperview() }
+    }
+
+    @MainActor
+    final class Coordinator {
+        @Binding private var loadFailed: Bool
+        private var runtime: NativeRuntimeSession?
+        private var eventTask: Task<Void, Never>?
+        private var attachTask: Task<Void, Never>?
+        private var isSuspended = false
+        var lastInputCommandID: UUID?
+
+        init(loadFailed: Binding<Bool>) {
+            _loadFailed = loadFailed
+        }
+
+        func install(runtime: NativeRuntimeSession, in container: UIView) {
+            self.runtime = runtime
+            eventTask = Task { @MainActor [weak self] in
+                for await event in runtime.events {
+                    guard let self else { return }
+                    if case .failed = event { loadFailed = true }
+                }
+            }
+            attachTask = Task { @MainActor [weak self, weak container] in
+                do {
+                    try await runtime.start()
+                } catch {
+                    self?.loadFailed = true
+                    return
+                }
+                for _ in 0..<200 {
+                    guard let self, let container, self.runtime != nil else { return }
+                    if let gameView = runtime.nativeView() {
+                        gameView.removeFromSuperview()
+                        gameView.frame = container.bounds
+                        gameView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                        container.insertSubview(gameView, at: 0)
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(25))
+                }
+                self?.loadFailed = true
+            }
+        }
+
+        func setSuspended(_ suspended: Bool) {
+            guard suspended != isSuspended, let runtime else { return }
+            isSuspended = suspended
+            Task {
+                if suspended { await runtime.pause() } else { await runtime.resume() }
+            }
+        }
+
+        func sendTap(_ action: EngineInputAction) {
+            guard let runtime else { return }
+            Task {
+                await runtime.send(.button(action: action, pressed: true))
+                try? await Task.sleep(for: .milliseconds(50))
+                await runtime.send(.button(action: action, pressed: false))
+            }
+        }
+
+        func stop() {
+            eventTask?.cancel()
+            eventTask = nil
+            attachTask?.cancel()
+            attachTask = nil
+            guard let runtime else { return }
+            self.runtime = nil
+            Task { await runtime.stop() }
+        }
+    }
+}
+
 private struct WebInputCommand: Equatable {
     let id = UUID()
     let keyCode: Int
+
+    var nativeAction: EngineInputAction? {
+        switch keyCode {
+        case 38: .up
+        case 40: .down
+        case 37: .left
+        case 39: .right
+        case 90: .confirm
+        case 88: .cancel
+        default: nil
+        }
+    }
 }
 
 private struct GameVirtualControls: View {
@@ -274,13 +523,15 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
 
     private let gameID: UUID
     private let rootURL: URL
+    private let additionalRoots: [String: URL]
     private let queue = DispatchQueue(label: "com.yume.local-game-resources", qos: .userInitiated)
     private let lock = NSLock()
     private var stoppedTasks: Set<ObjectIdentifier> = []
 
-    init(gameID: UUID, rootURL: URL) {
+    init(gameID: UUID, rootURL: URL, additionalRoots: [String: URL] = [:]) {
         self.gameID = gameID
         self.rootURL = rootURL.standardizedFileURL
+        self.additionalRoots = additionalRoots.mapValues(\.standardizedFileURL)
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
@@ -310,10 +561,21 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
             }
 
             let decodedPath = requestURL.path.removingPercentEncoding ?? requestURL.path
-            let relativeValue = decodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            var components = decodedPath
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .split(separator: "/", omittingEmptySubsequences: true)
+                .map(String.init)
+            let selectedRoot: URL
+            if let prefix = components.first, let routedRoot = additionalRoots[prefix] {
+                selectedRoot = routedRoot
+                components.removeFirst()
+            } else {
+                selectedRoot = rootURL
+            }
+            let relativeValue = components.joined(separator: "/")
             let relativePath = try StorageRelativePath(rawValue: relativeValue)
-            let fileURL = rootURL.appendingPathComponent(relativePath.rawValue).standardizedFileURL
-            guard fileURL.path.hasPrefix(rootURL.path + "/") else {
+            let fileURL = selectedRoot.appendingPathComponent(relativePath.rawValue).standardizedFileURL
+            guard fileURL.path.hasPrefix(selectedRoot.path + "/") else {
                 throw ResourceError.invalidRequest
             }
 
@@ -328,7 +590,14 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
             }
             guard !isStopped(identifier) else { return }
 
-            let mimeType = values.contentType?.preferredMIMEType ?? "application/octet-stream"
+            let mimeType: String
+            switch fileURL.pathExtension.lowercased() {
+            case "wasm": mimeType = "application/wasm"
+            case "swf": mimeType = "application/x-shockwave-flash"
+            case "js": mimeType = "text/javascript"
+            case "html", "htm": mimeType = "text/html"
+            default: mimeType = values.contentType?.preferredMIMEType ?? "application/octet-stream"
+            }
             let fileSize = Int64(values.fileSize ?? 0)
             let requestedRange = try Self.byteRange(
                 from: task.request.value(forHTTPHeaderField: "Range"),
@@ -445,13 +714,30 @@ private nonisolated final class GameLocalStorageBridge: NSObject, WKScriptMessag
         (() => {
           const values = \(json);
           const keys = () => Object.keys(values);
+          const utf8Length = value => new TextEncoder().encode(value).length;
+          const persist = message => {
+            if (utf8Length(JSON.stringify(values)) > \(Self.maximumStoreByteCount)) {
+              throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+            }
+            window.webkit.messageHandlers.\(Self.messageName).postMessage(message);
+          };
           const storage = {
             get length() { return keys().length; },
             key(index) { const key = keys()[Number(index)]; return key === undefined ? null : key; },
             getItem(key) { key = String(key); return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : null; },
             setItem(key, value) {
-              key = String(key); value = String(value); values[key] = value;
-              window.webkit.messageHandlers.\(Self.messageName).postMessage({op: "set", key, value});
+              key = String(key); value = String(value);
+              if (utf8Length(key) > \(Self.maximumKeyByteCount) ||
+                  utf8Length(value) > \(Self.maximumValueByteCount)) {
+                throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+              }
+              const previous = Object.prototype.hasOwnProperty.call(values, key) ? values[key] : undefined;
+              values[key] = value;
+              try { persist({op: "set", key, value}); }
+              catch (error) {
+                if (previous === undefined) delete values[key]; else values[key] = previous;
+                throw error;
+              }
             },
             removeItem(key) {
               key = String(key); delete values[key];
@@ -479,8 +765,8 @@ private nonisolated final class GameLocalStorageBridge: NSObject, WKScriptMessag
 
         let key = body["key"] as? String
         let value = body["value"] as? String
-        queue.async { [weak self, operation, key, value] in
-            self?.apply(operation: operation, key: key, value: value)
+        queue.async { [self, operation, key, value] in
+            apply(operation: operation, key: key, value: value)
         }
     }
 

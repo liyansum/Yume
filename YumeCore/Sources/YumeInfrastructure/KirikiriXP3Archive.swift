@@ -47,24 +47,27 @@ public struct XP3Entry: Sendable, Equatable {
     public let archivedSize: UInt64
     public let dataOffset: UInt64
     public let isProtected: Bool
+    public let isCompressed: Bool
 
     public init(
         relativePath: StorageRelativePath,
         uncompressedSize: UInt64,
         archivedSize: UInt64,
         dataOffset: UInt64,
-        isProtected: Bool
+        isProtected: Bool,
+        isCompressed: Bool = false
     ) {
         self.relativePath = relativePath
         self.uncompressedSize = uncompressedSize
         self.archivedSize = archivedSize
         self.dataOffset = dataOffset
         self.isProtected = isProtected
+        self.isCompressed = isCompressed
     }
 }
 
 public struct KirikiriXP3Archive: Sendable {
-    private static let headerPrefix: [UInt8] = Array("XP3\r\n \n\x1A".utf8)
+    private static let headerPrefix: [UInt8] = [0x58, 0x50, 0x33, 0x0D, 0x0A, 0x20, 0x0A, 0x1A]
     private static let classicVariant: [UInt8] = [0x8D, 0xEA]
     private static let modernVariant: [UInt8] = [0x67, 0x4E]
     private static let tocOffsetByteCount = 8
@@ -79,7 +82,11 @@ public struct KirikiriXP3Archive: Sendable {
 
     public func index(at url: URL) throws -> [XP3Entry] {
         guard url.isFileURL else { throw XP3Error.sourceIsNotFileURL }
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        let values = try url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey
+        ])
         guard values.isSymbolicLink != true else { throw XP3Error.sourceIsSymbolicLink }
         guard values.isRegularFile == true else { throw XP3Error.sourceMissing }
 
@@ -113,6 +120,10 @@ public struct KirikiriXP3Archive: Sendable {
         }
         guard !entry.isProtected else { throw XP3Error.protectedEntryUnsupported }
 
+        if entry.isCompressed {
+            return try extractCompressed(entry, from: sourceURL, to: destinationURL)
+        }
+
         let handle = try FileHandle(forReadingFrom: sourceURL)
         defer { try? handle.close() }
         do {
@@ -121,7 +132,9 @@ public struct KirikiriXP3Archive: Sendable {
                 throw XP3Error.outOfBounds
             }
             try handle.seek(toOffset: entry.dataOffset)
-            FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
+            guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw XP3Error.invalidArchive
+            }
             let output = try FileHandle(forWritingTo: destinationURL)
             defer { try? output.close() }
 
@@ -143,6 +156,29 @@ public struct KirikiriXP3Archive: Sendable {
     private struct Chunk {
         let tag: String
         let payload: Data
+    }
+
+    private func extractCompressed(_ entry: XP3Entry, from sourceURL: URL, to destinationURL: URL) throws {
+        guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+            throw XP3Error.destinationAlreadyExists
+        }
+        do {
+            let result = sourceURL.path.withCString { source in
+                destinationURL.path.withCString { output in
+                    yume_deflate_raw_to_file(
+                        source,
+                        entry.dataOffset,
+                        entry.archivedSize,
+                        output,
+                        entry.uncompressedSize
+                    )
+                }
+            }
+            guard result == YUME_ZIP_OK else { throw XP3Error.decompressionFailed(result) }
+        } catch {
+            try? FileManager.default.removeItem(at: destinationURL)
+            throw error
+        }
     }
 
     private func parseTOC(sourcePath: String, tocOffset: UInt64, fileSize: UInt64) throws -> [XP3Entry] {
@@ -232,7 +268,7 @@ public struct KirikiriXP3Archive: Sendable {
         var archivedSize: UInt64?
 
         for chunk in chunks {
-            let reader = ByteReader(data: chunk.payload)
+            var reader = ByteReader(data: chunk.payload)
             switch chunk.tag {
             case "info":
                 protectFlag = try reader.readUInt32()
@@ -260,7 +296,9 @@ public struct KirikiriXP3Archive: Sendable {
               let originalSize,
               let archivedSize
         else { throw XP3Error.invalidArchive }
-        guard compressionFlag == 0 else { throw XP3Error.compressedEntryUnsupported }
+        guard compressionFlag == 0 || compressionFlag == 1 else {
+            throw XP3Error.invalidArchive
+        }
 
         let normalized = name.replacingOccurrences(of: "\\", with: "/")
         guard normalized.utf8.count <= limits.maximumPathByteCount else { throw XP3Error.pathLimitExceeded }
@@ -272,7 +310,8 @@ public struct KirikiriXP3Archive: Sendable {
             uncompressedSize: originalSize,
             archivedSize: archivedSize,
             dataOffset: dataOffset,
-            isProtected: protectFlag != 0
+            isProtected: protectFlag != 0,
+            isCompressed: compressionFlag == 1
         )
     }
 

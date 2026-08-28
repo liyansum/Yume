@@ -1,0 +1,100 @@
+name: Build test IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "Yume.xcodeproj/**"
+      - "YumeApp/**"
+      - "YumeCore/**"
+      - "ThirdParty/**"
+      - "Scripts/**"
+      - ".github/workflows/build-test-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build unsigned arm64 IPA
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      YUME_NATIVE_BUILD_JOBS: "6"
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          cmake --version
+          df -h .
+
+      - name: Restore native download cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .native-build/downloads
+            .native-build/vcpkg/downloads
+          key: yume-native-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
+          restore-keys: |
+            yume-native-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Run pre-test gate
+        run: Scripts/verify_pretest.sh
+
+      - name: Build unsigned device app
+        run: |
+          xcodebuild \
+            -project Yume.xcodeproj \
+            -scheme Yume \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/YumeDerivedData" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            build
+
+      - name: Package IPA
+        run: |
+          app="$RUNNER_TEMP/YumeDerivedData/Build/Products/Release-iphoneos/Yume.app"
+          test -x "$app/Yume"
+          xcrun lipo -verify_arch arm64 "$app/Yume"
+          package_root="$RUNNER_TEMP/YumePackage"
+          mkdir -p "$package_root/Payload"
+          /usr/bin/ditto --noqtn "$app" "$package_root/Payload/Yume.app"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")"
+          build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")"
+          ipa="$GITHUB_WORKSPACE/Yume-${version}-${build}-unsigned.ipa"
+          (
+            cd "$package_root"
+            /usr/bin/zip -qry "$ipa" Payload
+          )
+          shasum -a 256 "$ipa" > "$ipa.sha256"
+          unzip -t "$ipa"
+          ls -lh "$ipa" "$ipa.sha256"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yume-unsigned-IPA-${{ github.run_number }}
+          path: |
+            Yume-*-unsigned.ipa
+            Yume-*-unsigned.ipa.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

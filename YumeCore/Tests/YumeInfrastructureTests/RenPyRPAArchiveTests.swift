@@ -117,22 +117,24 @@ private struct PickleBuilder {
 
     private var entries: [BuiltEntry] = []
 
-    mutating func add(name rawName: String, offset: Int, size: Int, key: UInt32) -> PickleBuilder {
-        let xored = String(
-            rawName.unicodeScalars.map { Unicode.Scalar($0.value ^ key) ?? $0 }
-        )
-        entries.append(BuiltEntry(name: xored, offset: offset, size: size, prefixLength: nil))
-        return self
+    func add(name rawName: String, offset: Int, size: Int, key: UInt32) -> PickleBuilder {
+        let scalars = rawName.unicodeScalars.map { Unicode.Scalar($0.value ^ key) ?? $0 }
+        let xored = String(String.UnicodeScalarView(scalars))
+        var copy = self
+        copy.entries.append(BuiltEntry(name: xored, offset: offset, size: size, prefixLength: nil))
+        return copy
     }
 
-    mutating func add(name: String, offset: Int, prefixLength: Int, size: Int) -> PickleBuilder {
-        entries.append(BuiltEntry(name: name, offset: offset, size: size, prefixLength: prefixLength))
-        return self
+    func add(name: String, offset: Int, prefixLength: Int, size: Int) -> PickleBuilder {
+        var copy = self
+        copy.entries.append(BuiltEntry(name: name, offset: offset, size: size, prefixLength: prefixLength))
+        return copy
     }
 
     func build() -> Data {
         var data = Data([0x80, 0x02])
         data.append(0x7D)
+        data.append(0x28)
         for entry in entries {
             appendText(&data, entry.name)
             if entry.prefixLength == nil {
@@ -143,7 +145,8 @@ private struct PickleBuilder {
             } else {
                 data.append(contentsOf: [0x28])
                 appendInt(&data, entry.offset)
-                data.append(contentsOf: [0x55, UInt8(entry.prefixLength!), 0x61, 0x62, 0x63])
+                data.append(contentsOf: [0x55, UInt8(entry.prefixLength!)])
+                data.append(Data(repeating: 0x61, count: entry.prefixLength!))
                 appendInt(&data, entry.size)
                 data.append(0x74)
             }
@@ -165,5 +168,29 @@ private struct PickleBuilder {
         data.append(0x49)
         data.append(contentsOf: String(value).utf8)
         data.append(0x0A)
+    }
+}
+
+extension RenPyRPAArchiveTests {
+    func testExtractSkipsPrefixBytes() throws {
+        let fixture = try RPAFixture()
+        defer { fixture.remove() }
+        let prefix = Data("--prefix-junk-".utf8)
+        let content = Data("real-renpy-script-content".utf8)
+        var file = Data(repeating: 0, count: 32)
+        file.append(prefix)
+        file.append(content)
+        try file.write(to: fixture.archiveURL)
+
+        let entry = RPAGameFileEntry(
+            relativePath: try StorageRelativePath(rawValue: "script.rpyc"),
+            offset: 32,
+            byteCount: UInt64(content.count),
+            prefixByteCount: prefix.count
+        )
+
+        let destination = fixture.root.appendingPathComponent("out.rpyc")
+        try RenPyRPAArchive().extract(entry, from: fixture.archiveURL, to: destination)
+        XCTAssertEqual(try Data(contentsOf: destination), content)
     }
 }

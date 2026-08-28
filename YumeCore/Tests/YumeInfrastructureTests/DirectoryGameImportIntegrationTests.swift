@@ -6,11 +6,20 @@ import YumeDomain
 
 @MainActor
 final class DirectoryGameImportIntegrationTests: XCTestCase {
+    private func makeStorage(for fixture: ImportFixture) -> LocalGameStorage {
+        LocalGameStorage(baseURL: fixture.storageRoot) { _ in
+            LocalGameStorage.VolumeCapacity(
+                availableByteCount: 100 * 1_073_741_824,
+                totalByteCount: 100 * 1_073_741_824
+            )
+        }
+    }
+
     func testRPGMakerMZFolderImportsAtomicallyAndPersistsInLibrary() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry,
@@ -37,11 +46,93 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         XCTAssertTrue(taskIDs.isEmpty)
     }
 
+    func testRPGMakerMZZIPImportsThroughExtractionDetectionAndCommit() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        let archiveURL = fixture.container.appendingPathComponent("Fixture Game.zip")
+        try ImportZIPBuilder.make([
+            .init(name: "Fixture Game/index.html", data: Data("<!doctype html>".utf8), crc32: 0x87b9ec48),
+            .init(
+                name: "Fixture Game/js/rmmz_core.js",
+                data: Data("// self-authored test runtime marker".utf8),
+                crc32: 0x6462440d
+            ),
+            .init(
+                name: "Fixture Game/data/System.json",
+                data: Data("{\"gameTitle\":\"Fixture\"}".utf8),
+                crc32: 0x30c550a9
+            )
+        ]).write(to: archiveURL)
+
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry,
+            now: { Date(timeIntervalSince1970: 1_700_000_000) }
+        )
+
+        let imported = try await service.importZIP(at: archiveURL)
+        let location = try await storage.contentLocation(for: imported.id)
+
+        XCTAssertEqual(imported.engine.id.rawValue, "rpg-maker-mz")
+        XCTAssertEqual(imported.title, "Fixture Game")
+        XCTAssertEqual(location.webEntryPoint?.rawValue, "index.html")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: location.rootURL.appendingPathComponent("js/rmmz_core.js").path
+            )
+        )
+        let stagingTaskIDs = try await storage.stagingTaskIDs()
+        XCTAssertTrue(stagingTaskIDs.isEmpty)
+    }
+
+    func testEncrypted7zImportsWithTransientPassword() async throws {
+        let fixture = try ImportFixture()
+        let archive = try SevenZipFixture()
+        defer {
+            fixture.remove()
+            archive.remove()
+        }
+        try archive.makeArchive(
+            [
+                ("Fixture Game/index.html", Data("<!doctype html>".utf8)),
+                (
+                    "Fixture Game/js/rmmz_core.js",
+                    Data("// self-authored test runtime marker".utf8)
+                ),
+                ("Fixture Game/data/System.json", Data("{}".utf8))
+            ],
+            password: "temporary-password",
+            encryptHeader: true
+        )
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+
+        let imported = try await service.import7z(
+            at: archive.archiveURL,
+            password: "temporary-password"
+        )
+        let location = try await storage.contentLocation(for: imported.id)
+
+        XCTAssertEqual(imported.engine.id.rawValue, "rpg-maker-mz")
+        XCTAssertEqual(location.webEntryPoint?.rawValue, "index.html")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: location.rootURL.appendingPathComponent("data/System.json").path
+            )
+        )
+        let stagingTaskIDs = try await storage.stagingTaskIDs()
+        XCTAssertTrue(stagingTaskIDs.isEmpty)
+    }
+
     func testUnsupportedNativePluginFailsClosedAndCleansStaging() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame(nativePlugin: true)
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -65,7 +156,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         defer { fixture.remove() }
         try fixture.makeMZGame()
         try fixture.write("duplicate", to: "DATA/system.json")
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
 
         do {
             _ = try await storage.validateDirectorySource(at: fixture.sourceRoot)
@@ -77,11 +168,41 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         }
     }
 
+    func testInsufficientCapacityFailsBeforeCopyAndCleansStaging() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        try fixture.makeMZGame()
+        let storage = LocalGameStorage(baseURL: fixture.storageRoot) { _ in
+            LocalGameStorage.VolumeCapacity(
+                availableByteCount: 1_024,
+                totalByteCount: 100 * 1_073_741_824
+            )
+        }
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+
+        do {
+            _ = try await service.importDirectory(at: fixture.sourceRoot)
+            XCTFail("Expected the production reserve to reject the import")
+        } catch let GameImportError.insufficientStorage(budget) {
+            XCTAssertFalse(budget.hasSufficientCapacity)
+            XCTAssertEqual(budget.availableByteCount, 1_024)
+            XCTAssertEqual(budget.reserveByteCount, 5 * 1_073_741_824)
+        }
+
+        let taskIDs = try await storage.stagingTaskIDs()
+        let games = try await storage.allGames()
+        XCTAssertTrue(taskIDs.isEmpty)
+        XCTAssertTrue(games.isEmpty)
+    }
+
     func testMarkPlayedAndRemoveUpdatePersistentLibrary() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -102,7 +223,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -123,7 +244,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -150,7 +271,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -175,7 +296,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -206,7 +327,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -227,7 +348,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
-        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let storage = makeStorage(for: fixture)
         let service = DirectoryGameImportService(
             storage: storage,
             detectors: BuiltInGameDetectors.registry
@@ -291,5 +412,74 @@ private struct ImportFixture {
 
     func remove() {
         try? FileManager.default.removeItem(at: container)
+    }
+}
+
+private enum ImportZIPBuilder {
+    struct Entry {
+        let name: String
+        let data: Data
+        let crc32: UInt32
+    }
+
+    static func make(_ entries: [Entry]) -> Data {
+        var archive = Data()
+        var centralDirectory = Data()
+
+        for entry in entries {
+            let name = Data(entry.name.utf8)
+            let localOffset = UInt32(archive.count)
+            archive.appendLittleEndian(UInt32(0x04034b50))
+            archive.appendLittleEndian(UInt16(20))
+            archive.appendLittleEndian(UInt16(0))
+            archive.appendLittleEndian(UInt16(0))
+            archive.appendLittleEndian(UInt16(0))
+            archive.appendLittleEndian(UInt16(0))
+            archive.appendLittleEndian(entry.crc32)
+            archive.appendLittleEndian(UInt32(entry.data.count))
+            archive.appendLittleEndian(UInt32(entry.data.count))
+            archive.appendLittleEndian(UInt16(name.count))
+            archive.appendLittleEndian(UInt16(0))
+            archive.append(name)
+            archive.append(entry.data)
+
+            centralDirectory.appendLittleEndian(UInt32(0x02014b50))
+            centralDirectory.appendLittleEndian(UInt16(0x0314))
+            centralDirectory.appendLittleEndian(UInt16(20))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(entry.crc32)
+            centralDirectory.appendLittleEndian(UInt32(entry.data.count))
+            centralDirectory.appendLittleEndian(UInt32(entry.data.count))
+            centralDirectory.appendLittleEndian(UInt16(name.count))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt16(0))
+            centralDirectory.appendLittleEndian(UInt32(0x81a40000))
+            centralDirectory.appendLittleEndian(localOffset)
+            centralDirectory.append(name)
+        }
+
+        let centralOffset = UInt32(archive.count)
+        archive.append(centralDirectory)
+        archive.appendLittleEndian(UInt32(0x06054b50))
+        archive.appendLittleEndian(UInt16(0))
+        archive.appendLittleEndian(UInt16(0))
+        archive.appendLittleEndian(UInt16(entries.count))
+        archive.appendLittleEndian(UInt16(entries.count))
+        archive.appendLittleEndian(UInt32(centralDirectory.count))
+        archive.appendLittleEndian(centralOffset)
+        archive.appendLittleEndian(UInt16(0))
+        return archive
+    }
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
     }
 }

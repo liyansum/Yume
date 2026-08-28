@@ -1,0 +1,78 @@
+/*
+** exception.h
+**
+** This file is part of mkxp.
+**
+** Copyright (C) 2013 - 2021 Amaryllis Kulla <ancurio@mapleshrine.eu>
+**
+** mkxp is free software: you can redistribute it and/or modify
+** it under the terms of the GNU General Public License as published by
+** the Free Software Foundation, either version 2 of the License, or
+** (at your option) any later version.
+**
+** mkxp is distributed in the hope that it will be useful,
+** but WITHOUT ANY WARRANTY; without even the implied warranty of
+** MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+** GNU General Public License for more details.
+**
+** You should have received a copy of the GNU General Public License
+** along with mkxp.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#ifndef EXCEPTION_H
+#define EXCEPTION_H
+
+#include <string>
+#include <stdio.h>
+#include <stdarg.h>
+
+// `__attribute__((visibility("default")))` forces the typeinfo
+// (`__ZTI9Exception`) and typestring (`__ZTS9Exception`) symbols
+// emitted for this class to keep external visibility even when
+// the rest of the translation unit is hidden. Without it, under
+// `-O3` the per-TU weak typeinfo instances don't always dedup
+// across the `ld -r` merge step that builds `mkxp{N}-merged.o`,
+// and `__cxa_throw` / `__cxa_can_catch` end up comparing
+// different typeinfo addresses for what is logically the same
+// type. The catch in `RB_METHOD_GUARD_END` then misses, the
+// engine throw escapes, libc++abi terminates the app with
+// "uncaught exception of type Exception". Default visibility
+// guarantees a single canonical typeinfo address per type.
+struct __attribute__((visibility("default"))) Exception
+{
+	enum Type
+	{
+		RGSSError,
+		Reset,
+		NoFileError,
+		IOError,
+
+		/* Already defined by ruby */
+		TypeError,
+		ArgumentError,
+		SystemExit,
+		RuntimeError,
+
+		/* New types introduced in mkxp */
+		PHYSFSError,
+		SDLError,
+		MKXPError
+	};
+
+	Type type;
+	std::string msg;
+
+	Exception(Type type, const char *format, ...)
+	    : type(type)
+	{
+		va_list ap;
+		va_start(ap, format);
+
+		msg.resize(512);
+		vsnprintf(&msg[0], msg.size(), format, ap);
+
+		va_end(ap);
+	}
+};
+
+#endif // EXCEPTION_H

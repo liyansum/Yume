@@ -3,6 +3,18 @@ import YumeApplication
 import YumeDomain
 
 public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvider, GameMaintenance, GameSaveTransfer, GameRuntimePackageStore {
+    public struct VolumeCapacity: Sendable, Equatable {
+        public let availableByteCount: Int64
+        public let totalByteCount: Int64
+
+        public init(availableByteCount: Int64, totalByteCount: Int64) {
+            self.availableByteCount = max(0, availableByteCount)
+            self.totalByteCount = max(0, totalByteCount)
+        }
+    }
+
+    public typealias CapacityProvider = @Sendable (URL) throws -> VolumeCapacity
+
     public struct Layout: Sendable, Equatable {
         public let root: URL
         public let games: URL
@@ -61,10 +73,18 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
     private static let maximumSaveTransferByteCount = 100 * 1_024 * 1_024
 
     private let fileManager: FileManager
+    private let capacityProvider: CapacityProvider
 
     public init(baseURL: URL) {
         self.layout = Layout(root: baseURL.standardizedFileURL)
         self.fileManager = .default
+        self.capacityProvider = { try LocalGameStorage.systemVolumeCapacity(at: $0) }
+    }
+
+    public init(baseURL: URL, capacityProvider: @escaping CapacityProvider) {
+        self.layout = Layout(root: baseURL.standardizedFileURL)
+        self.fileManager = .default
+        self.capacityProvider = capacityProvider
     }
 
     public func prepareStorage() async throws {
@@ -204,16 +224,28 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         )
     }
 
-    public func validateZIPSource(at sourceURL: URL) async throws -> StorageBudget {
+    public func validateZIPSource(at sourceURL: URL, password: String?) async throws -> StorageBudget {
         try await prepareStorage()
         let inspection = try SafeZIPExtractor().inspect(sourceURL)
-        guard !inspection.containsEncryptedEntries else {
-            throw SafeZIPError.encryptedEntryUnsupported
+        guard !inspection.containsEncryptedEntries || password?.isEmpty == false else {
+            throw SafeZIPError.passwordRequired
         }
         let attributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
         let archiveByteCount = Int64(truncating: attributes[.size] as? NSNumber ?? 0)
         return try storageBudget(
             sourceByteCount: archiveByteCount,
+            requiredByteCount: inspection.uncompressedByteCount
+        )
+    }
+
+    public func validate7zSource(at sourceURL: URL, password: String?) async throws -> StorageBudget {
+        try await prepareStorage()
+        let inspection = try Safe7zExtractor().inspect(sourceURL, password: password)
+        guard !inspection.containsEncryptedEntries || password?.isEmpty == false else {
+            throw Safe7zError.passwordRequired
+        }
+        return try storageBudget(
+            sourceByteCount: inspection.compressedByteCount,
             requiredByteCount: inspection.uncompressedByteCount
         )
     }
@@ -246,6 +278,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
 
     public func stageZIP(
         at sourceURL: URL,
+        password: String?,
         for taskID: ImportTaskID
     ) async throws -> StagedSourceSummary {
         let workspace = try await createStagingTask(id: taskID, createdAt: Date())
@@ -257,7 +290,41 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             throw StorageError.stagedContentAlreadyExists
         }
 
-        let inspection = try SafeZIPExtractor().extract(sourceURL, to: destination)
+        let inspection = try SafeZIPExtractor().extract(
+            sourceURL,
+            to: destination,
+            password: password
+        )
+        let fingerprint = try contentFingerprint(at: destination)
+        let relativePath = try StorageRelativePath(rawValue: Self.originalDirectoryName)
+        try await registerOwnedPath(relativePath, for: taskID, updatedAt: Date())
+        return StagedSourceSummary(
+            sourceRelativePath: relativePath,
+            byteCount: inspection.uncompressedByteCount,
+            fileCount: inspection.fileCount,
+            contentFingerprint: fingerprint
+        )
+    }
+
+    public func stage7z(
+        at sourceURL: URL,
+        password: String?,
+        for taskID: ImportTaskID
+    ) async throws -> StagedSourceSummary {
+        let workspace = try await createStagingTask(id: taskID, createdAt: Date())
+        let destination = workspace.contentRootURL.appendingPathComponent(
+            Self.originalDirectoryName,
+            isDirectory: true
+        )
+        guard !fileManager.fileExists(atPath: destination.path) else {
+            throw StorageError.stagedContentAlreadyExists
+        }
+
+        let inspection = try Safe7zExtractor().extract(
+            sourceURL,
+            to: destination,
+            password: password
+        )
         let fingerprint = try contentFingerprint(at: destination)
         let relativePath = try StorageRelativePath(rawValue: Self.originalDirectoryName)
         try await registerOwnedPath(relativePath, for: taskID, updatedAt: Date())
@@ -502,15 +569,22 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         if fileManager.fileExists(atPath: nestedWebRoot.appendingPathComponent("index.html").path) {
             contentRoot = nestedWebRoot
         }
-        let entryPoint = try StorageRelativePath(rawValue: "index.html")
-        guard fileManager.fileExists(atPath: contentRoot.appendingPathComponent(entryPoint.rawValue).path) else {
-            throw GameContentError.entryPointMissing
-        }
+        let candidateEntryPoint = try StorageRelativePath(rawValue: "index.html")
+        let entryPoint = fileManager.fileExists(
+            atPath: contentRoot.appendingPathComponent(candidateEntryPoint.rawValue).path
+        ) ? candidateEntryPoint : nil
+        let runtimeEntryPoint = manifest.detection.evidence.first { evidence in
+            evidence.kind == .requiredFile
+                && !evidence.relativePath.rawValue.hasSuffix("/")
+        }?.relativePath
         return GameContentLocation(
             game: manifest.game,
             rootURL: contentRoot,
             saveRootURL: gameRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true),
-            entryPoint: entryPoint
+            derivedRootURL: gameRoot.appendingPathComponent(Self.derivedDirectoryName, isDirectory: true),
+            logRootURL: gameRoot.appendingPathComponent(Self.logsDirectoryName, isDirectory: true),
+            webEntryPoint: entryPoint,
+            runtimeEntryPoint: runtimeEntryPoint
         )
     }
 
@@ -643,6 +717,27 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         }
     }
 
+    public func readFileHead(
+        for taskID: ImportTaskID,
+        relativePath: StorageRelativePath,
+        byteCount: Int
+    ) async throws -> Data {
+        try validateExistingWorkspaceRoot(for: taskID)
+        let url = contentRootURL(for: taskID)
+            .appendingPathComponent(relativePath.rawValue)
+            .standardizedFileURL
+        guard url.path.hasPrefix(contentRootURL(for: taskID).standardizedFileURL.path + "/") else {
+            throw StorageError.unsupportedSourceEntry(relativePath.rawValue)
+        }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            throw StorageError.unsupportedSourceEntry(relativePath.rawValue)
+        }
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        return try handle.read(upToCount: max(0, byteCount)) ?? Data()
+    }
+
     public func listRTPPackages() async throws -> [RTPPackage] {
         try await prepareStorage()
         return try loadRTPIndex().packages
@@ -669,7 +764,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         let summary = try summarizeTree(at: source)
         guard summary.fileCount > 0 else { throw RTPStoreError.sourceIsEmpty }
 
-        let engineDirectory = layout.rtp.appendingPathComponent(engine.id.rawValue, isDirectory: true)
+        let engineDirectory = layout.rtp.appendingPathComponent(engine.rawValue, isDirectory: true)
         let destination = engineDirectory.appendingPathComponent(name, isDirectory: true)
         guard !fileManager.fileExists(atPath: destination.path) else {
             throw RTPStoreError.duplicateName
@@ -862,18 +957,9 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         sourceByteCount: Int64,
         requiredByteCount: Int64
     ) throws -> StorageBudget {
-        #if os(Linux)
-        let attributes = try fileManager.attributesOfFileSystem(forPath: layout.root.path)
-        let available = Int64(truncating: attributes[.systemFreeSize] as? NSNumber ?? 0)
-        let total = Int64(truncating: attributes[.systemSize] as? NSNumber ?? 0)
-        #else
-        let values = try layout.root.resourceValues(forKeys: [
-            .volumeAvailableCapacityForImportantUsageKey,
-            .volumeTotalCapacityKey
-        ])
-        let available = max(0, values.volumeAvailableCapacityForImportantUsage ?? 0)
-        let total = Int64(max(0, values.volumeTotalCapacity ?? 0))
-        #endif
+        let capacity = try capacityProvider(layout.root)
+        let available = capacity.availableByteCount
+        let total = capacity.totalByteCount
         let gibibyte = Int64(1_073_741_824)
         let reserve = min(10 * gibibyte, max(2 * gibibyte, total / 20))
         return StorageBudget(
@@ -882,6 +968,24 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             availableByteCount: available,
             reserveByteCount: reserve
         )
+    }
+
+    private nonisolated static func systemVolumeCapacity(
+        at root: URL
+    ) throws -> VolumeCapacity {
+        #if os(Linux)
+        let attributes = try FileManager.default.attributesOfFileSystem(forPath: root.path)
+        let available = Int64(truncating: attributes[.systemFreeSize] as? NSNumber ?? 0)
+        let total = Int64(truncating: attributes[.systemSize] as? NSNumber ?? 0)
+        #else
+        let values = try root.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeTotalCapacityKey
+        ])
+        let available = max(0, values.volumeAvailableCapacityForImportantUsage ?? 0)
+        let total = Int64(max(0, values.volumeTotalCapacity ?? 0))
+        #endif
+        return VolumeCapacity(availableByteCount: available, totalByteCount: total)
     }
 
     private func summarizeTree(at root: URL) throws -> TreeSummary {

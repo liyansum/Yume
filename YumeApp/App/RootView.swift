@@ -42,12 +42,12 @@ struct RootView: View {
             await model.refreshRTPPackages()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .background, model.activeGame != nil else { return }
+            guard phase == .background, model.activeSession != nil else { return }
             model.suspendPlayback()
         }
-        .fullScreenCover(item: activeGameBinding) { location in
+        .fullScreenCover(item: activeSessionBinding) { session in
             GamePlayerView(
-                location: location,
+                session: session,
                 suspended: model.isPlaybackSuspended,
                 onResume: { model.resumePlayback() },
                 onClose: { Task { await model.stopPlaying() } }
@@ -99,11 +99,11 @@ struct RootView: View {
         }
     }
 
-    private var activeGameBinding: Binding<GameContentLocation?> {
+    private var activeSessionBinding: Binding<GamePlaySession?> {
         Binding(
-            get: { model.activeGame },
+            get: { model.activeSession },
             set: { newValue in
-                if newValue == nil, model.activeGame != nil {
+                if newValue == nil, model.activeSession != nil {
                     Task { await model.stopPlaying() }
                 }
             }

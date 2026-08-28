@@ -53,7 +53,12 @@
 "import.result.partial.title" = "一部のインポートが完了";
 "import.result.failure.title" = "インポート失敗";
 "import.failure.archiveNotAvailable" = "この形式のアーカイブはまだサポートされていません。ZIP または展開済みのゲームフォルダを選択してください。";
-"import.failure.encryptedArchive" = "この ZIP は暗号化されています。パスワード付きアーカイブはまだサポートされていません。";
+"import.failure.encryptedArchive" = "暗号化されたアーカイブを解除できなかったため、ファイルは読み込まれませんでした。";
+"import.password.title" = "アーカイブのパスワード";
+"import.password.retry.title" = "パスワードが違います";
+"import.password.message" = "アーカイブのパスワードを入力してください。この読み込みにのみ使用し、保存しません。";
+"import.password.placeholder" = "パスワード";
+"import.password.unlock" = "解除";
 "import.failure.unsupportedArchive" = "この ZIP は、Yume が安全に展開できない機能または圧縮方式を使用しています。";
 "import.failure.unsafeArchive" = "安全でないパス、リンク、重複項目、または過度な展開を含むため、このアーカイブを拒否しました。";
 "import.failure.insufficientStorage" = "このゲームを安全にインポートするための空き容量がありません。";
@@ -116,6 +121,7 @@
 "diagnostics.offline.message" = "診断情報はこのデバイス内に留まり、ログ、クラッシュ、利用データはアップロードされません。";
 "licenses.app.title" = "Yume";
 "licenses.app.message" = "Yume のアプリコードはプロプライエタリです。このビルドには第三者ランタイム部品を含みません。";
+"licenses.thirdparty.title" = "サードパーティ構成要素";
 "licenses.system.title" = "Apple システムフレームワーク";
 "licenses.system.message" = "このビルドは OS が提供する SwiftUI、Foundation、WebKit、Uniform Type Identifiers を使用します。";
 "privacy.offline.title" = "オフライン動作";

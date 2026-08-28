@@ -156,7 +156,7 @@ public extension SignatureGameDetector {
             Rule(.file("renpy/common/00start.rpy"), kind: .characteristicFile, detailCode: "renpy.runtime", score: 30),
             Rule(.directory("game"), kind: .characteristicDirectory, detailCode: "renpy.gameDirectory", score: 10)
         ],
-        blockingExtensions: ["pyd", "dll"]
+        runtimeAvailable: true
     )
 
     static let rgss = SignatureGameDetector(
@@ -174,7 +174,7 @@ public extension SignatureGameDetector {
             Rule(.fileExtension("ini"), kind: .metadata, detailCode: "rgss.ini", score: 15),
             Rule(.directory("graphics"), kind: .characteristicDirectory, detailCode: "rgss.graphics", score: 5)
         ],
-        blockingExtensions: ["dll"]
+        runtimeAvailable: true
     )
 
     static let rpgMakerMV = webRPGMaker(
@@ -204,7 +204,8 @@ public extension SignatureGameDetector {
         supporting: [
             Rule(.fileExtension("nsa"), kind: .characteristicFile, detailCode: "ons.archive.nsa", score: 20),
             Rule(.fileExtension("sar"), kind: .characteristicFile, detailCode: "ons.archive.sar", score: 20)
-        ]
+        ],
+        runtimeAvailable: true
     )
 
     static let kirikiri = SignatureGameDetector(
@@ -220,7 +221,8 @@ public extension SignatureGameDetector {
         supporting: [
             Rule(.fileExtension("ks"), kind: .characteristicFile, detailCode: "kirikiri.kagScript", score: 20)
         ],
-        blockingExtensions: ["tpm", "dll"]
+        blockingExtensions: ["tpm", "dll"],
+        runtimeAvailable: true
     )
 
     static let flash = SignatureGameDetector(
@@ -232,7 +234,8 @@ public extension SignatureGameDetector {
         requiredAny: [
             Rule(.fileExtension("swf"), kind: .requiredFile, detailCode: "flash.swf", score: 90)
         ],
-        supporting: []
+        supporting: [],
+        runtimeAvailable: true
     )
 
     static let tyranoScript = SignatureGameDetector(

@@ -33,7 +33,8 @@ public struct GameEngineCatalog: Sendable, Equatable {
     public static let restrictedWebEngines: Set<EngineID> = [
         EngineID(rawValue: "rpg-maker-mv"),
         EngineID(rawValue: "rpg-maker-mz"),
-        EngineID(rawValue: "tyranoscript")
+        EngineID(rawValue: "tyranoscript"),
+        EngineID(rawValue: "flash")
     ]
 
     public init(

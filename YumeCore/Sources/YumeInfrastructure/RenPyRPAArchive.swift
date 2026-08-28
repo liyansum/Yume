@@ -12,6 +12,7 @@ public enum RPAError: Error, Equatable, Sendable {
     case duplicatePath
     case entryLimitExceeded
     case pathLimitExceeded
+    case outOfBounds
 }
 
 public struct RPALimits: Sendable, Equatable {
@@ -28,18 +29,20 @@ public struct RPAGameFileEntry: Sendable, Equatable {
     public let relativePath: StorageRelativePath
     public let offset: UInt64
     public let byteCount: UInt64
+    public let prefixByteCount: Int
 
-    public init(relativePath: StorageRelativePath, offset: UInt64, byteCount: UInt64) {
+    public init(relativePath: StorageRelativePath, offset: UInt64, byteCount: UInt64, prefixByteCount: Int = 0) {
         self.relativePath = relativePath
         self.offset = offset
         self.byteCount = byteCount
+        self.prefixByteCount = prefixByteCount
     }
 }
 
 public struct RenPyRPAArchive: Sendable {
     private static let maximumHeaderLineByteCount = 128
     private static let maximumIndexByteCount = 64 * 1_024 * 1_024
-    private static let maximumOperationCount = 2_000_000
+    fileprivate static let maximumOperationCount = 2_000_000
 
     private let limits: RPALimits
 
@@ -49,7 +52,11 @@ public struct RenPyRPAArchive: Sendable {
 
     public func index(at url: URL) throws -> [RPAGameFileEntry] {
         guard url.isFileURL else { throw RPAError.sourceIsNotFileURL }
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        let values = try url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey
+        ])
         guard values.isSymbolicLink != true else { throw RPAError.sourceIsSymbolicLink }
         guard values.isRegularFile == true else { throw RPAError.sourceMissing }
 
@@ -81,6 +88,42 @@ public struct RenPyRPAArchive: Sendable {
     public func decodeIndex(_ data: Data, key: UInt32?) throws -> [RPAGameFileEntry] {
         var decoder = PickleDecoder(data: data, limits: limits)
         return try decoder.decode(key: key)
+    }
+
+    public func extract(_ entry: RPAGameFileEntry, from sourceURL: URL, to destinationURL: URL) throws {
+        guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+            throw RPAError.truncatedIndex
+        }
+        let handle = try FileHandle(forReadingFrom: sourceURL)
+        defer { try? handle.close() }
+        do {
+            let fileSize = try UInt64(handle.seekToEnd())
+            let skip = UInt64(entry.prefixByteCount)
+            let contentStart = entry.offset + skip
+            guard entry.offset < fileSize, skip <= fileSize - entry.offset,
+                  entry.byteCount <= fileSize - contentStart
+            else { throw RPAError.outOfBounds }
+
+            try handle.seek(toOffset: contentStart)
+            guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw RPAError.outOfBounds
+            }
+            let output = try FileHandle(forWritingTo: destinationURL)
+            defer { try? output.close() }
+
+            var remaining = entry.byteCount
+            while remaining > 0 {
+                let requested = Int(min(65_536, remaining))
+                guard let chunk = try handle.read(upToCount: requested), !chunk.isEmpty else {
+                    throw RPAError.outOfBounds
+                }
+                try output.write(contentsOf: chunk)
+                remaining -= UInt64(chunk.count)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: destinationURL)
+            throw error
+        }
     }
 
     private func readHeaderLine(_ handle: FileHandle) throws -> [UInt8] {
@@ -142,7 +185,7 @@ private struct HeaderParser {
         return UInt32(truncatingIfNeeded: try Self.hexValue(token))
     }
 
-    private func next() -> [UInt8]? {
+    private mutating func next() -> [UInt8]? {
         guard position < tokens.count else { return nil }
         defer { position += 1 }
         return tokens[position]
@@ -168,7 +211,7 @@ private struct HeaderParser {
 }
 
 private struct PickleDecoder {
-    private enum Value {
+    fileprivate enum Value {
         case text(String)
         case number(Int64)
         case sequence([Value])
@@ -274,8 +317,8 @@ private struct PickleDecoder {
         return try buildEntries(key: key)
     }
 
-    private func buildEntries(key: UInt32?) throws -> [RPAGameFileEntry] {
-        guard let top = pop(), case let .mapping(pairs) = top, pairs.count % 2 == 0 else {
+    private mutating func buildEntries(key: UInt32?) throws -> [RPAGameFileEntry] {
+        guard let top = try pop(), case let .mapping(pairs) = top, pairs.count % 2 == 0 else {
             throw RPAError.invalidArchive
         }
 
@@ -293,12 +336,13 @@ private struct PickleDecoder {
                 throw RPAError.unsafePath
             }
             let folded = name.folding(
-                options: [.caseInsensitive, .diacriticInsensitive],
+                options: String.CompareOptions([.caseInsensitive, .diacriticInsensitive]),
                 locale: Locale(identifier: "en_US_POSIX")
             )
             guard foldedPaths.insert(folded).inserted else { throw RPAError.duplicatePath }
 
             let fields = pairs[pairIndex + 1]
+            var prefixCount = 0
             let offset: Int64
             let size: Int64
             switch fields.sequenceValues?.count ?? 0 {
@@ -310,8 +354,10 @@ private struct PickleDecoder {
                 size = second
             case 3:
                 guard let first = fields.sequenceValues?[0].numberValue,
-                      let third = fields.sequenceValues?[2].numberValue
+                      let third = fields.sequenceValues?[2].numberValue,
+                      let middle = fields.sequenceValues?[1].textValue
                 else { throw RPAError.invalidArchive }
+                prefixCount = Int(middle.utf8.count)
                 offset = first
                 size = third
             default:
@@ -323,7 +369,8 @@ private struct PickleDecoder {
                 RPAGameFileEntry(
                     relativePath: relativePath,
                     offset: UInt64(offset),
-                    byteCount: UInt64(size)
+                    byteCount: UInt64(size),
+                    prefixByteCount: prefixCount
                 )
             )
         }

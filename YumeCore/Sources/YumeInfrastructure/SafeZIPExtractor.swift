@@ -1,4 +1,5 @@
 import CYumeZlib
+import CMinizipNG
 import Foundation
 import YumeDomain
 
@@ -31,6 +32,8 @@ public enum SafeZIPError: Error, Equatable, Sendable {
     case invalidArchive
     case multiDiskArchiveUnsupported
     case encryptedEntryUnsupported
+    case passwordRequired
+    case incorrectPasswordOrCorruptArchive
     case unsupportedCompressionMethod(UInt16)
     case unsupportedFilenameEncoding
     case unsafePath
@@ -84,13 +87,17 @@ public struct SafeZIPExtractor: Sendable {
         )
     }
 
-    public func extract(_ sourceURL: URL, to destinationURL: URL) throws -> ZIPArchiveInspection {
+    public func extract(
+        _ sourceURL: URL,
+        to destinationURL: URL,
+        password: String? = nil
+    ) throws -> ZIPArchiveInspection {
         let archive = try parse(sourceURL)
         guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
             throw SafeZIPError.destinationAlreadyExists
         }
-        guard !archive.entries.contains(where: \.isEncrypted) else {
-            throw SafeZIPError.encryptedEntryUnsupported
+        if archive.entries.contains(where: \.isEncrypted), password?.isEmpty != false {
+            throw SafeZIPError.passwordRequired
         }
 
         try FileManager.default.createDirectory(at: destinationURL, withIntermediateDirectories: true)
@@ -113,22 +120,44 @@ public struct SafeZIPExtractor: Sendable {
                     at: outputURL.deletingLastPathComponent(),
                     withIntermediateDirectories: true
                 )
-                let dataOffset = try localDataOffset(for: entry, handle: handle, fileSize: archive.fileSize)
-                let result = sourceURL.path.withCString { sourcePath in
-                    outputURL.path.withCString { outputPath in
-                        yume_zip_extract_entry(
-                            sourcePath,
-                            dataOffset,
-                            entry.compressedSize,
-                            entry.compressionMethod,
-                            outputPath,
-                            entry.uncompressedSize,
-                            entry.crc32
-                        )
+                let result: Int32
+                if entry.isEncrypted {
+                    result = extractEncryptedEntry(
+                        entry,
+                        sourceURL: sourceURL,
+                        outputURL: outputURL,
+                        password: password!
+                    )
+                } else {
+                    let dataOffset = try localDataOffset(
+                        for: entry,
+                        handle: handle,
+                        fileSize: archive.fileSize
+                    )
+                    result = sourceURL.path.withCString { sourcePath in
+                        outputURL.path.withCString { outputPath in
+                            yume_zip_extract_entry(
+                                sourcePath,
+                                dataOffset,
+                                entry.compressedSize,
+                                entry.compressionMethod,
+                                outputPath,
+                                entry.uncompressedSize,
+                                entry.crc32
+                            )
+                        }
                     }
                 }
                 guard result == YUME_ZIP_OK else {
+                    if entry.isEncrypted,
+                       result == MZ_PASSWORD_ERROR || result == MZ_CRYPT_ERROR || result == MZ_CRC_ERROR {
+                        throw SafeZIPError.incorrectPasswordOrCorruptArchive
+                    }
                     throw SafeZIPError.extractionFailed(result)
+                }
+                let values = try outputURL.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                    throw SafeZIPError.unsafePath
                 }
             }
         } catch {
@@ -141,7 +170,7 @@ public struct SafeZIPExtractor: Sendable {
             fileCount: archive.entries.filter { !$0.isDirectory }.count,
             compressedByteCount: archive.entries.reduce(0) { $0 + Int64($1.compressedSize) },
             uncompressedByteCount: archive.entries.reduce(0) { $0 + Int64($1.uncompressedSize) },
-            containsEncryptedEntries: false
+            containsEncryptedEntries: archive.entries.contains { $0.isEncrypted }
         )
     }
 
@@ -152,7 +181,9 @@ public struct SafeZIPExtractor: Sendable {
     }
 
     private struct Entry {
+        let archiveName: String
         let relativePath: StorageRelativePath
+        let archiveCompressionMethod: UInt16
         let compressionMethod: UInt16
         let flags: UInt16
         let crc32: UInt32
@@ -161,7 +192,9 @@ public struct SafeZIPExtractor: Sendable {
         let localHeaderOffset: UInt64
         let isDirectory: Bool
 
-        var isEncrypted: Bool { flags & 0x0001 != 0 || flags & 0x0040 != 0 }
+        var isEncrypted: Bool {
+            archiveCompressionMethod == 99 || flags & 0x0001 != 0 || flags & 0x0040 != 0
+        }
     }
 
     private func parse(_ sourceURL: URL) throws -> Archive {
@@ -206,10 +239,7 @@ public struct SafeZIPExtractor: Sendable {
             let versionMadeBy = try reader.readUInt16()
             _ = try reader.readUInt16()
             let flags = try reader.readUInt16()
-            let method = try reader.readUInt16()
-            guard method == 0 || method == 8 else {
-                throw SafeZIPError.unsupportedCompressionMethod(method)
-            }
+            let archiveMethod = try reader.readUInt16()
             try reader.skip(4)
             let crc32 = try reader.readUInt32()
             let compressed32 = try reader.readUInt32()
@@ -224,6 +254,16 @@ public struct SafeZIPExtractor: Sendable {
             let nameData = try reader.readData(count: nameLength)
             let extraData = try reader.readData(count: extraLength)
             try reader.skip(commentLength)
+
+            let method: UInt16
+            if archiveMethod == 99 {
+                method = try winZipAESCompressionMethod(in: extraData)
+            } else {
+                method = archiveMethod
+            }
+            guard method == 0 || method == 8 else {
+                throw SafeZIPError.unsupportedCompressionMethod(method)
+            }
 
             let name = try decodedName(nameData, flags: flags)
             let directoryEntry = name.hasSuffix("/")
@@ -281,7 +321,9 @@ public struct SafeZIPExtractor: Sendable {
 
             entries.append(
                 Entry(
+                    archiveName: name,
                     relativePath: relativePath,
+                    archiveCompressionMethod: archiveMethod,
                     compressionMethod: method,
                     flags: flags,
                     crc32: crc32,
@@ -405,7 +447,7 @@ public struct SafeZIPExtractor: Sendable {
         try reader.skip(16)
         let nameLength = UInt64(try reader.readUInt16())
         let extraLength = UInt64(try reader.readUInt16())
-        guard localFlags == entry.flags, localMethod == entry.compressionMethod else {
+        guard localFlags == entry.flags, localMethod == entry.archiveCompressionMethod else {
             throw SafeZIPError.invalidArchive
         }
         let headerSize = UInt64(30) + nameLength + extraLength
@@ -444,6 +486,50 @@ public struct SafeZIPExtractor: Sendable {
             return result
         }
         return Zip64Values()
+    }
+
+    private func winZipAESCompressionMethod(in data: Data) throws -> UInt16 {
+        var reader = ByteReader(data: data)
+        while reader.remaining >= 4 {
+            let identifier = try reader.readUInt16()
+            let size = Int(try reader.readUInt16())
+            let field = try reader.readData(count: size)
+            guard identifier == 0x9901 else { continue }
+            guard field.count == 7 else { throw SafeZIPError.invalidArchive }
+            var aes = ByteReader(data: field)
+            let version = try aes.readUInt16()
+            let vendor = try aes.readData(count: 2)
+            let strength = try aes.readData(count: 1)[0]
+            let method = try aes.readUInt16()
+            guard (version == 1 || version == 2), vendor == Data([0x41, 0x45]),
+                  (1...3).contains(strength)
+            else { throw SafeZIPError.invalidArchive }
+            return method
+        }
+        throw SafeZIPError.invalidArchive
+    }
+
+    private func extractEncryptedEntry(
+        _ entry: Entry,
+        sourceURL: URL,
+        outputURL: URL,
+        password: String
+    ) -> Int32 {
+        sourceURL.path.withCString { sourcePath in
+            entry.archiveName.withCString { entryName in
+                password.withCString { passwordBytes in
+                    outputURL.path.withCString { outputPath in
+                        yume_minizip_extract_entry(
+                            sourcePath,
+                            entryName,
+                            passwordBytes,
+                            outputPath,
+                            entry.uncompressedSize
+                        )
+                    }
+                }
+            }
+        }
     }
 
     private func required<T>(_ value: T?) throws -> T {

@@ -81,13 +81,17 @@ public struct SWFFileParser: Sendable {
 
     private let maximumTagSummaries: Int
 
-    public init(maximumTagSummaries: Int = SWFFileParser.maximumTagScanCount) {
+    public init(maximumTagSummaries: Int = 512) {
         self.maximumTagSummaries = maximumTagSummaries
     }
 
     public func inspect(at url: URL) throws -> SWFInspection {
         guard url.isFileURL else { throw SWFError.sourceIsNotFileURL }
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        let values = try url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey
+        ])
         guard values.isSymbolicLink != true else { throw SWFError.sourceIsSymbolicLink }
         guard values.isRegularFile == true else { throw SWFError.sourceMissing }
 
@@ -106,25 +110,28 @@ public struct SWFFileParser: Sendable {
         let fileSize = UInt64(values.fileSize ?? 0)
 
         var body: Data
+        let compressionKind: SWFCompressionKind
         switch Array(signature) {
         case Array("FWS".utf8):
+            compressionKind = .none
             try handle.seek(toOffset: UInt64(Self.headerByteCount))
-            let remainingLimit = min(Self.maximumBitReaderBytes, Int(min(UInt64(Int32.max), declaredByteCount)) - Self.headerByteCount)
+            let remainingLimit = min(
+                Self.maximumBitReaderBytes,
+                Int(declaredByteCount) - Self.headerByteCount
+            )
             guard remainingLimit > 0,
                   let payload = try handle.read(upToCount: remainingLimit), !payload.isEmpty
             else { throw SWFError.truncatedHeader }
             body = payload
         case Array("CWS".utf8):
+            compressionKind = .deflate
             guard fileSize > UInt64(Self.headerByteCount) else { throw SWFError.truncatedHeader }
             let compressedLimit = Int(min(fileSize - UInt64(Self.headerByteCount), UInt64(Self.maximumCompressedBodyByteCount)))
             try handle.seek(toOffset: UInt64(Self.headerByteCount))
             guard let compressed = try handle.read(upToCount: compressedLimit), !compressed.isEmpty else {
                 throw SWFError.truncatedHeader
             }
-            let uncompressedCapacity = Int(min(
-                UInt64(Int32.max),
-                declaredByteCount - UInt32(Self.headerByteCount)
-            ))
+            let uncompressedCapacity = Int(declaredByteCount) - Self.headerByteCount
             guard uncompressedCapacity > 0, uncompressedCapacity <= Self.maximumBitReaderBytes else {
                 throw SWFError.outOfBounds
             }
@@ -152,11 +159,11 @@ public struct SWFFileParser: Sendable {
             }
             summaries.append(SWFTagSummary(code: code, byteLength: length))
             if code == Self.endTagCode { break }
-            try reader.skip(UInt64(length))
+            try reader.skip(UInt64(length) * 8)
         }
 
         return SWFInspection(
-            compressionKind: .none,
+            compressionKind: compressionKind,
             version: version,
             declaredByteCount: declaredByteCount,
             frameSize: rect,
@@ -270,7 +277,13 @@ private struct BitReader {
         let maxX = try readIntBits(bitsPerCoordinate)
         let minY = try readIntBits(bitsPerCoordinate)
         let maxY = try readIntBits(bitsPerCoordinate)
+        alignToByte()
         return SWFRect(minX: Int32(truncatingIfNeeded: minX), maxX: Int32(truncatingIfNeeded: maxX), minY: Int32(truncatingIfNeeded: minY), maxY: Int32(truncatingIfNeeded: maxY))
+    }
+
+    private mutating func alignToByte() {
+        guard bitIndex != 0 else { return }
+        advanceByte()
     }
 
     private mutating func advanceByte() {

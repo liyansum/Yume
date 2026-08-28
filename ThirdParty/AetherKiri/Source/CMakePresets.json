@@ -1,0 +1,386 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "Windows Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "WINDOWS": true,
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": [ "Windows" ]
+        }
+      }
+    },
+    {
+      "name": "Windows Debug Config",
+      "inherits": "Windows Config",
+      "binaryDir": "${sourceDir}/out/windows/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug"
+      }
+    },
+    {
+      "name": "Windows Release Config",
+      "inherits": "Windows Config",
+      "binaryDir": "${sourceDir}/out/windows/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release"
+      }
+    },
+    {
+      "name": "Windows MinGW Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "WINDOWS": true,
+        "CMAKE_SYSTEM_NAME": "Windows",
+        "CMAKE_C_COMPILER": "i686-w64-mingw32-gcc",
+        "CMAKE_CXX_COMPILER": "i686-w64-mingw32-g++",
+        "CMAKE_RC_COMPILER": "i686-w64-mingw32-windres",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "Linux Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "LINUX": true,
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "Linux Debug Config",
+      "inherits": "Linux Config",
+      "binaryDir": "${sourceDir}/out/linux/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug"
+      }
+    },
+    {
+      "name": "Linux Release Config",
+      "inherits": "Linux Config",
+      "binaryDir": "${sourceDir}/out/linux/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release"
+      }
+    },
+    {
+      "name": "MacOS Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "MACOS": true,
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.0",
+        "CMAKE_Swift_COMPILER_TARGET": "arm64-apple-macosx13.0",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "VCPKG_TARGET_TRIPLET": "arm64-osx",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "MacOS Debug Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
+      }
+    },
+    {
+      "name": "MacOS Release Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release"
+      }
+    },
+    {
+      "name": "MacOS x64 Debug Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos-x64/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_Swift_COMPILER_TARGET": "x86_64-apple-macosx13.0",
+        "VCPKG_TARGET_TRIPLET": "x64-osx",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
+      }
+    },
+    {
+      "name": "MacOS x64 Release Config",
+      "inherits": "MacOS Config",
+      "binaryDir": "${sourceDir}/out/macos-x64/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_Swift_COMPILER_TARGET": "x86_64-apple-macosx13.0",
+        "VCPKG_TARGET_TRIPLET": "x64-osx"
+      }
+    },
+    {
+      "name": "iOS Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "IOS": true,
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.0",
+        "CMAKE_Swift_COMPILER_TARGET": "arm64-apple-ios16.0",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "iOS Debug Config",
+      "inherits": "iOS Config",
+      "binaryDir": "${sourceDir}/out/ios/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
+      }
+    },
+    {
+      "name": "iOS Simulator Debug Config",
+      "inherits": "iOS Config",
+      "binaryDir": "${sourceDir}/out/ios-simulator/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "CMAKE_Swift_COMPILER_TARGET": "arm64-apple-ios16.0-simulator",
+        "VCPKG_TARGET_TRIPLET": "arm64-ios-simulator"
+      }
+    },
+    {
+      "name": "iOS Simulator x64 Debug Config",
+      "inherits": "iOS Config",
+      "binaryDir": "${sourceDir}/out/ios-simulator-x64/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "CMAKE_Swift_COMPILER_TARGET": "x86_64-apple-ios16.0-simulator",
+        "VCPKG_TARGET_TRIPLET": "x64-ios-simulator"
+      }
+    },
+    {
+      "name": "iOS Release Config",
+      "inherits": "iOS Config",
+      "binaryDir": "${sourceDir}/out/ios/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release"
+      }
+    },
+    {
+      "name": "Android arm64 Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/${presetName}",
+      "cacheVariables": {
+        "VCPKG_TARGET_ANDROID": true,
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24",
+        "ANDROID_STL": "c++_shared",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false,
+        "BUILD_ENGINE_API": true,
+        "BUILD_GODOT_EXTENSION": true
+      }
+    },
+    {
+      "name": "Android arm64 Debug Config",
+      "inherits": "Android arm64 Config",
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VCPKG_BUILD_TYPE": "debug",
+        "CMAKE_C_FLAGS_DEBUG": "-Og -g",
+        "CMAKE_CXX_FLAGS_DEBUG": "-Og -g"
+      }
+    },
+    {
+      "name": "Android arm64 Release Config",
+      "inherits": "Android arm64 Config",
+      "binaryDir": "${sourceDir}/out/android/arm64-v8a/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_BUILD_TYPE": "release"
+      }
+    },
+    {
+      "name": "Web Config",
+      "generator": "Ninja",
+      "hidden": true,
+      "cacheVariables": {
+        "WEB": true,
+        "VCPKG_TARGET_TRIPLET": "wasm32-emscripten",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/vcpkg/triplets",
+        "VCPKG_BUILD_TYPE": "release",
+        "CMAKE_POSITION_INDEPENDENT_CODE": true,
+        "CMAKE_C_FLAGS": "-fPIC -pthread -msimd128",
+        "CMAKE_CXX_FLAGS": "-fPIC -pthread -msimd128",
+        "CMAKE_EXE_LINKER_FLAGS": "-pthread -msimd128",
+        "CMAKE_SHARED_LINKER_FLAGS": "-pthread -msimd128",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+        "BUILD_TOOLS": false,
+        "ENABLE_TESTS": false,
+        "BUILD_ENGINE_API": true,
+        "BUILD_GODOT_EXTENSION": true,
+        "BUILD_GPU_BRIDGE": false
+      }
+    },
+    {
+      "name": "Web Debug Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "Web Release Config",
+      "inherits": "Web Config",
+      "binaryDir": "${sourceDir}/out/web/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "Windows Debug Build",
+      "configurePreset": "Windows Debug Config"
+    },
+    {
+      "name": "Windows Release Build",
+      "configurePreset": "Windows Release Config"
+    },
+    {
+      "name": "Linux Debug Build",
+      "configurePreset": "Linux Debug Config"
+    },
+    {
+      "name": "Linux Release Build",
+      "configurePreset": "Linux Release Config"
+    },
+    {
+      "name": "MacOS Debug Build",
+      "configurePreset": "MacOS Debug Config"
+    },
+    {
+      "name": "MacOS Release Build",
+      "configurePreset": "MacOS Release Config"
+    },
+    {
+      "name": "MacOS x64 Debug Build",
+      "configurePreset": "MacOS x64 Debug Config"
+    },
+    {
+      "name": "MacOS x64 Release Build",
+      "configurePreset": "MacOS x64 Release Config"
+    },
+    {
+      "name": "iOS Debug Build",
+      "configurePreset": "iOS Debug Config"
+    },
+    {
+      "name": "iOS Simulator Debug Build",
+      "configurePreset": "iOS Simulator Debug Config"
+    },
+    {
+      "name": "iOS Simulator x64 Debug Build",
+      "configurePreset": "iOS Simulator x64 Debug Config"
+    },
+    {
+      "name": "iOS Release Build",
+      "configurePreset": "iOS Release Config"
+    },
+    {
+      "name": "Android arm64 Debug Build",
+      "configurePreset": "Android arm64 Debug Config"
+    },
+    {
+      "name": "Android arm64 Release Build",
+      "configurePreset": "Android arm64 Release Config"
+    },
+    {
+      "name": "Web Debug Build",
+      "configurePreset": "Web Debug Config"
+    },
+    {
+      "name": "Web Release Build",
+      "configurePreset": "Web Release Config"
+    }
+  ]
+}

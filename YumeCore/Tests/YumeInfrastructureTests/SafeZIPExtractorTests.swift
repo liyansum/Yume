@@ -55,7 +55,7 @@ final class SafeZIPExtractorTests: XCTestCase {
         }
     }
 
-    func testEncryptedAndSymbolicLinkEntriesFailClosed() throws {
+    func testEncryptedEntryRequiresPasswordAndSymbolicLinkEntriesFailClosed() throws {
         let fixture = try ZIPFixture()
         defer { fixture.remove() }
         try ZIPBuilder.make([
@@ -67,7 +67,7 @@ final class SafeZIPExtractorTests: XCTestCase {
         XCTAssertThrowsError(
             try SafeZIPExtractor().extract(fixture.archiveURL, to: fixture.destinationURL)
         ) { error in
-            XCTAssertEqual(error as? SafeZIPError, .encryptedEntryUnsupported)
+            XCTAssertEqual(error as? SafeZIPError, .passwordRequired)
         }
 
         try ZIPBuilder.make([
@@ -81,6 +81,69 @@ final class SafeZIPExtractorTests: XCTestCase {
         XCTAssertThrowsError(try SafeZIPExtractor().inspect(fixture.archiveURL)) { error in
             XCTAssertEqual(error as? SafeZIPError, .symbolicLinkEntry)
         }
+    }
+
+    func testTraditionalEncryptedZIPRejectsWrongPasswordAndExtractsWithCorrectPassword() throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        try Data(base64Encoded: Self.pkCryptFixture)!.write(to: fixture.archiveURL)
+
+        XCTAssertThrowsError(
+            try SafeZIPExtractor().extract(
+                fixture.archiveURL,
+                to: fixture.destinationURL,
+                password: "wrong"
+            )
+        ) { error in
+            XCTAssertEqual(error as? SafeZIPError, .incorrectPasswordOrCorruptArchive)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destinationURL.path))
+
+        let result = try SafeZIPExtractor().extract(
+            fixture.archiveURL,
+            to: fixture.destinationURL,
+            password: "yume-test"
+        )
+        XCTAssertTrue(result.containsEncryptedEntries)
+        XCTAssertEqual(
+            try String(
+                contentsOf: fixture.destinationURL.appendingPathComponent("index.html"),
+                encoding: .utf8
+            ),
+            "<!doctype html>encrypted fixture\n"
+        )
+    }
+
+    func testWinZipAES256RejectsWrongPasswordAndExtractsWithCorrectPassword() throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        try Data(base64Encoded: Self.aes256Fixture)!.write(to: fixture.archiveURL)
+
+        let inspection = try SafeZIPExtractor().inspect(fixture.archiveURL)
+        XCTAssertTrue(inspection.containsEncryptedEntries)
+        XCTAssertThrowsError(
+            try SafeZIPExtractor().extract(
+                fixture.archiveURL,
+                to: fixture.destinationURL,
+                password: "wrong"
+            )
+        ) { error in
+            XCTAssertEqual(error as? SafeZIPError, .incorrectPasswordOrCorruptArchive)
+        }
+
+        let result = try SafeZIPExtractor().extract(
+            fixture.archiveURL,
+            to: fixture.destinationURL,
+            password: "yume-test"
+        )
+        XCTAssertTrue(result.containsEncryptedEntries)
+        XCTAssertEqual(
+            try String(
+                contentsOf: fixture.destinationURL.appendingPathComponent("game/index.html"),
+                encoding: .utf8
+            ),
+            "<!doctype html>encrypted fixture"
+        )
     }
 
     func testCRCMismatchRemovesPartialDestination() throws {
@@ -99,6 +162,12 @@ final class SafeZIPExtractorTests: XCTestCase {
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destinationURL.path))
     }
+
+    private static let pkCryptFixture =
+        "UEsDBAoACQAAACK3G12FjbAOLQAAACEAAAAKABwAaW5kZXguaHRtbFVUCQADP1CQakNQkGp1eAsAAQQAAAAABAAAAAD3OAIkD3Skz4H58akrxb/GuMM9Ow0LkLO1yZOu8FJw6B+LZNuOPFQT6ILQpbBQSwcIhY2wDi0AAAAhAAAAUEsBAh4DCgAJAAAAIrcbXYWNsA4tAAAAIQAAAAoAGAAAAAAAAQAAAICBAAAAAGluZGV4Lmh0bWxVVAUAAz9QkGp1eAsAAQQAAAAABAAAAABQSwUGAAAAAAEAAQBQAAAAgQAAAAAA"
+
+    private static let aes256Fixture =
+        "UEsDBDMACQhjAAAAAAAAAAAAAAAAACAAAAAPAAsAZ2FtZS9pbmRleC5odG1sAZkHAAEAQUUDCACbg9+19B3+0GTzXDCX1vuH5ie5LZdS6BWQa+oWecBlsa7f0jBigAgGKENUCxzw2L83v5JlX3+0+y8labkcb1BLBwgkx29kPgAAACAAAABQSwECLQMzAAkIYwAAAAAAJMdvZD4AAAAgAAAADwALAAAAAAAAAAAAAAAAAAAAZ2FtZS9pbmRleC5odG1sAZkHAAEAQUUDCABQSwUGAAAAAAEAAQBIAAAAhgAAAAAA"
 }
 
 private struct ZIPFixture {

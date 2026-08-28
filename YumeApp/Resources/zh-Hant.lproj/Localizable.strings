@@ -53,7 +53,12 @@
 "import.result.partial.title" = "部分匯入完成";
 "import.result.failure.title" = "匯入失敗";
 "import.failure.archiveNotAvailable" = "暫不支援這種壓縮檔格式。請選擇 ZIP 壓縮檔或已解壓的遊戲資料夾。";
-"import.failure.encryptedArchive" = "此 ZIP 壓縮檔已加密，暫不支援需要密碼的壓縮檔。";
+"import.failure.encryptedArchive" = "未能解鎖加密壓縮檔，未匯入任何檔案。";
+"import.password.title" = "壓縮檔密碼";
+"import.password.retry.title" = "密碼不正確";
+"import.password.message" = "請輸入壓縮檔密碼。密碼只用於本次匯入，不會儲存。";
+"import.password.placeholder" = "密碼";
+"import.password.unlock" = "解鎖";
 "import.failure.unsupportedArchive" = "此 ZIP 使用了 Yume 無法安全解壓的功能或壓縮方式。";
 "import.failure.unsafeArchive" = "Yume 已拒絕此壓縮檔，因為其中包含不安全路徑、連結、重複項目或異常膨脹內容。";
 "import.failure.insufficientStorage" = "可用空間不足，無法安全匯入此遊戲。";
@@ -116,6 +121,7 @@
 "diagnostics.offline.message" = "診斷資料只保留在此裝置；Yume 不上傳記錄、當機或使用資料。";
 "licenses.app.title" = "Yume";
 "licenses.app.message" = "Yume 應用程式碼為專有程式碼。此版本未包含第三方執行階段元件。";
+"licenses.thirdparty.title" = "第三方元件";
 "licenses.system.title" = "Apple 系統框架";
 "licenses.system.message" = "此版本使用作業系統提供的 SwiftUI、Foundation、WebKit 與統一類型識別框架。";
 "privacy.offline.title" = "離線執行";

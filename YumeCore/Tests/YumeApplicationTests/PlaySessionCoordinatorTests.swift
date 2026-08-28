@@ -48,7 +48,7 @@ final class PlaySessionCoordinatorTests: XCTestCase {
         let coordinator = makeCoordinator(games: [first, second])
 
         let location = try await coordinator.start(gameID: first.id)
-        XCTAssertEqual(location.game.id, first.id)
+        XCTAssertEqual(location.content.game.id, first.id)
         let activeAfterFirst = await coordinator.activeGameID()
         XCTAssertEqual(activeAfterFirst, first.id)
 
@@ -66,7 +66,7 @@ final class PlaySessionCoordinatorTests: XCTestCase {
 
         _ = try await coordinator.start(gameID: game.id)
         let restarted = try await coordinator.start(gameID: game.id)
-        XCTAssertEqual(restarted.game.id, game.id)
+        XCTAssertEqual(restarted.content.game.id, game.id)
     }
 
     func testStopReleasesExclusiveSlot() async throws {
@@ -171,7 +171,7 @@ private func makeLocation(game: ImportedGame) -> GameContentLocation {
         game: game,
         rootURL: URL(fileURLWithPath: "/tmp/yume-fixture/\(game.id.rawValue.uuidString)"),
         saveRootURL: URL(fileURLWithPath: "/tmp/yume-fixture/\(game.id.rawValue.uuidString)/saves"),
-        entryPoint: try! StorageRelativePath(rawValue: "index.html")
+        webEntryPoint: try! StorageRelativePath(rawValue: "index.html")
     )
 }
 

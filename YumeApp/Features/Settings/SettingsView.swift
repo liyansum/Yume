@@ -222,10 +222,44 @@ private struct DiagnosticsView: View {
 }
 
 private struct LicensesView: View {
+    private struct Notice: Identifiable {
+        let id: String
+        let name: String
+        let license: String
+        let url: String?
+    }
+
+    private let bundledNotices: [Notice] = [
+        Notice(id: "yume", name: "Yume", license: "GPL-3.0-or-later", url: nil),
+        Notice(id: "zlib", name: "zlib (via system libz)", license: "zlib", url: "https://www.zlib.net/zlib_license.html"),
+        Notice(id: "mkxp-z", name: "mkxp-z / Empo mobile fork", license: "GPL-2.0-or-later", url: "https://github.com/mateo-m/mkxp-z-apple-mobile"),
+        Notice(id: "aetherkiri", name: "AetherKiri 0.5 / OnscripterYuri", license: "GPL-3.0-or-later / GPL-2.0-or-later", url: "https://github.com/AetherKiri/AetherKiri"),
+        Notice(id: "renpy", name: "Ren'Py 8.5.3 / 7.8.7 and Renios", license: "MIT AND LGPL-2.1-or-later AND Python-2.0", url: "https://github.com/renpy/renpy"),
+        Notice(id: "ruffle", name: "Ruffle 0.5.0", license: "Apache-2.0 OR MIT", url: "https://github.com/ruffle-rs/ruffle"),
+        Notice(id: "plzma", name: "PLzmaSDK / LZMA SDK", license: "MIT AND public-domain", url: "https://github.com/OlehKulykov/PLzmaSDK"),
+        Notice(id: "minizip", name: "minizip-ng", license: "zlib", url: "https://github.com/zlib-ng/minizip-ng")
+    ]
+
     var body: some View {
         List {
             Section("licenses.app.title") {
                 Text("licenses.app.message")
+            }
+            Section("licenses.thirdparty.title") {
+                ForEach(bundledNotices) { notice in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(notice.name)
+                            .font(.subheadline.weight(.medium))
+                        Text(notice.license)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let url = notice.url, let link = URL(string: url) {
+                            Link(url.absoluteString, destination: link)
+                                .font(.caption2)
+                        }
+                    }
+                    .frame(minHeight: 44)
+                }
             }
             Section("licenses.system.title") {
                 Text("licenses.system.message")

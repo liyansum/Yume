@@ -1,0 +1,114 @@
+{
+  "formatVersion": 1,
+  "generatedAt": "2026-08-28",
+  "dependencies": [
+    {
+      "id": "plzmasdk",
+      "version": "1.6.1",
+      "source": "https://github.com/OlehKulykov/PLzmaSDK",
+      "commit": "f449bc3e13204b68a7e05fca80ce8c31642085ec",
+      "license": "MIT AND LZMA-SDK",
+      "integration": "vendored-source-static"
+    },
+    {
+      "id": "minizip-ng",
+      "source": "https://github.com/zlib-ng/minizip-ng",
+      "commit": "7d2917b47f6a3eae9d2f6d38d94b759158ed931c",
+      "license": "Zlib",
+      "features": ["Deflate", "PKCRYPT", "WZAES"],
+      "integration": "vendored-source-static"
+    },
+    {
+      "id": "ruffle-web",
+      "version": "0.5.0",
+      "source": "https://github.com/ruffle-rs/ruffle",
+      "commit": "a4f5b5256e245693bc9077ef6c6b6abc95490e7f",
+      "artifact": "https://github.com/ruffle-rs/ruffle/releases/download/v0.5.0/ruffle-0.5.0-web-selfhosted.zip",
+      "artifactSHA256": "4e0d44ba990f9fe3434d7848f740348299bd6c473db59fb5f8606b750fcc5760",
+      "license": "MIT OR Apache-2.0",
+      "integration": "bundled-webassembly"
+    },
+    {
+      "id": "mkxp-z-apple-mobile",
+      "version": "empo-pin-2026-08-27",
+      "source": "https://github.com/mateo-m/mkxp-z-apple-mobile",
+      "commit": "6d0d51034fe1474a5c42e24b6790bee2383d53a7",
+      "license": "GPL-2.0-or-later",
+      "artifacts": [
+        {
+          "url": "https://github.com/mateo-m/mkxp-z-apple-mobile/releases/download/engine-2026-08-20/engine-ios-prebuilt.tar.gz",
+          "sha256": "f7a201ced4315ade34df15bc47c5f1449f7f56a050a4eae04049924d6be4ca80"
+        },
+        {
+          "url": "https://github.com/mateo-m/empo-deps/releases/download/native-2026-08-20/native-ios-prebuilt.tar.gz",
+          "sha256": "b1e01ee9550b56cffddd6c2bd492f1685e6a02db1d61ba1e4e3de060e8632fb0"
+        },
+        {
+          "url": "https://github.com/mateo-m/empo-deps/releases/download/angle-2026-05-04/angle-ios-prebuilt.tar.gz",
+          "sha256": "0cd2b87b132b2c1344fe356ebcb57fa6ec63675d33d6fa11deb8a16bd57d3b9c"
+        }
+      ],
+      "integration": "vendored-source-pinned-prebuilt-static"
+    },
+    {
+      "id": "aetherkiri",
+      "version": "0.5.0+20260827",
+      "source": "https://github.com/AetherKiri/AetherKiri",
+      "commit": "dc2776046aabdd90ed08b938d0a604baaff58e52",
+      "license": "GPL-3.0-or-later",
+      "features": ["Kirikiri2", "KirikiriZ", "OnscripterYuri", "CPU-RGBA-host"],
+      "integration": "vendored-source-static"
+    },
+    {
+      "id": "onscripter-yuri",
+      "source": "https://github.com/AetherKiri/OnscripterYuri",
+      "commit": "21a1b3e5ab958af2ae7c07b50326ddd13f08ff1f",
+      "license": "GPL-2.0-or-later",
+      "integration": "vendored-submodule-static"
+    },
+    {
+      "id": "renpy-build",
+      "version": "renpy-8.5.3.26051504",
+      "source": "https://github.com/renpy/renpy-build",
+      "commit": "7bfab40c1174f622f644b24669afd5fb167fbb79",
+      "license": "MIT AND LGPL-2.1-or-later AND Python-2.0",
+      "integration": "official-renios-static"
+    },
+    {
+      "id": "renpy-modern",
+      "version": "8.5.3.26051504",
+      "source": "https://github.com/renpy/renpy",
+      "commit": "39895c1e017f0b36ffea2447d97eccd69d76ee1c",
+      "license": "MIT AND LGPL-2.1-or-later",
+      "artifacts": [
+        {
+          "url": "https://www.renpy.org/dl/8.5.3/renpy-8.5.3-renios.zip",
+          "sha256": "c4fae153e8276ed0faed5e84ea3e0b7c4bf337f0e3208e9130c6a41748a83b2b"
+        },
+        {
+          "url": "https://www.renpy.org/dl/8.5.3/renpy-8.5.3-sdk.zip",
+          "sha256": "ff57648f9c04f27e381c48af6d8e3ee3cdec296bed4d3831f47f09b0a71b505e"
+        }
+      ],
+      "integration": "official-renios-isolated-static"
+    },
+    {
+      "id": "renpy-legacy",
+      "version": "7.8.7.25031702",
+      "source": "https://github.com/renpy/renpy",
+      "commit": "b38cc6a5018edc7da3f201c33f46de666a64f3cd",
+      "license": "MIT AND LGPL-2.1-or-later AND Python-2.0",
+      "artifacts": [
+        {
+          "url": "https://www.renpy.org/dl/7.8.7/renpy-7.8.7-renios.zip",
+          "sha256": "faaabec4ec65efa8803a5a7222f6e40183c5fe8354c1ee4eeb78e978826cee86"
+        },
+        {
+          "url": "https://www.renpy.org/dl/7.8.7/renpy-7.8.7-sdk.zip",
+          "sha256": "51d5936c61d1d57626fa79f8b4839b0f4cc41c5e27f0632ae8e3fa6cbb0c5853"
+        }
+      ],
+      "integration": "official-renios-isolated-static"
+    }
+  ]
+}

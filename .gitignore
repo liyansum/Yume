@@ -2,6 +2,10 @@
 .DS_Store
 DerivedData/
 build/
+.native-build/
+ThirdParty/AetherKiri/Artifacts/
+ThirdParty/MKXPZ/Artifacts/
+ThirdParty/RenPy/Artifacts/
 *.xcuserstate
 xcuserdata/
 *.xccheckout
@@ -19,6 +23,7 @@ xcuserdata/
 !.env.example
 /Diagnostics/
 /Staging/
+/BuildArtifacts/
 /Application Support/
 
 # Editor and temporary files

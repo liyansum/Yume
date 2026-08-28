@@ -1,0 +1,85 @@
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+jobs:
+  ruby:
+    name: Ruby (rubocop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          # bundler-cache reads Gemfile.lock and caches gem installs
+          # across runs. Saves ~15s after first run.
+          bundler-cache: true
+
+      - name: rubocop
+        run: bundle exec rubocop --format github
+
+      # The compat scripts patch classes that only exist inside a
+      # running game, so these tests stub the engine bindings and the
+      # Pokemon Essentials classes. No simulator or GPU needed.
+      - name: regression tests
+        run: |
+          for test in tools/test_*.rb; do
+            echo "-> $test"
+            ruby "$test"
+          done
+
+  cpp:
+    name: C++ (host tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      # These build the engine sources under test directly. No SDL,
+      # no GPU, no Ruby, and no launcher, so a plain runner is enough.
+      - name: host tests
+        run: tools/run-cpp-tests.sh
+
+  markdown:
+    name: Markdown (markdownlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install markdownlint-cli
+        run: bun install --frozen-lockfile
+
+      - name: markdownlint
+        run: |
+          # Drive markdownlint from git ls-files but exclude
+          # vendored upstream READMEs (theoraplay/, etc.) that we
+          # don't own and don't want to reformat.
+          FILES=$(git ls-files '*.md' \
+            ':!:src/theoraplay/' \
+            ':!:hmode7/')
+          if [ -n "$FILES" ]; then
+            echo "$FILES" | xargs bun x markdownlint -c .markdownlint.json
+          fi
+
+  # Aggregate gate whose check-run name matches the ruleset's required
+  # "Lint" context exactly (same pattern as empo-app's workflows).
+  summary:
+    name: Lint
+    needs: [ruby, cpp, markdown]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every job passed
+        run: |
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]

@@ -1,40 +1,39 @@
 # Yume 当前任务状态
 
-> 当前任务：多引擎集成层补全（ADR-0053 落地第一批）——RTP 本地映射、RGSSAD 读取、CWS 全量解析、启动计划适配器、上游选型 ADR 与 GPL 合规基建
-> 状态：代码与决策层完成（静态验证通过）；"真机可用"仍被 macOS/Xcode 编译验证阻塞
-> 最后更新：2026-08-26
-
-## 目标
-
-- 把 ADR-0053 从决策推进为可编译的集成层：每个引擎族都有确定的启动路径声明。
-- 交付 RGSS 游戏的两个关键前置：RGSSAD v1 归档索引 + 用户自带 RTP 本地导入/映射/管理。
+> 当前任务：测试前功能开发与八引擎静态集成
+> 状态：功能代码、运行时接入和离线安全边界已完成；等待 macOS/Xcode 原生构建与真机测试
+> 最后更新：2026-08-28
 
 ## 已完成
 
-- **调研锁定**（2026-08-26 核对）：mkxp-z（GPL-2.0+，dev 分支持续构建，须关闭 enable-https）、ONScripter 20230825（GPL-2.0-only）、krkrsdl2（MIT 核心+非 GPL 第三方组件待审）、Ruffle v0.4.1（Apache/MIT 双许可）。
-- `CYumeZlib` 新增 `yume_zlib_inflate_mem`：内存到内存 zlib 解压（含 adler 尾校验），供 SWF CWS 压缩体使用。
-- `SWFFileParser` 升级：CWS 不再只读头部，压缩体全量解压后走统一 RECT/帧/tag 解析；容量上限 64 MiB 展开体/128 MiB 输入。
-- `RGSSArchive`：RGSSAD v1 索引（滚动密钥解密 TOC、路径归一、大小写查重、越界校验）+ 未加密条目流式提取；v3 仅识别并明确报 `versionThreeUnsupported`（其数据带混淆表，留给 mkxp-z 运行时处理）。
-- **用户 RTP 体系**：`RTPPackage/RTPIndex` 值类型 + `GameRuntimePackageStore` 协议 + `LocalGameStorage` 完整实现（`RTP/<engine>/<name>/` 目录、manifest.json 索引、名称白名单、去重、树校验复制、删除前恢复写权限、按游戏解析挂载根）。App 侧新增 RTPSettingsView（导入选引擎→文件夹选择器→列表/滑动删除），四语言 +12 键（各 182 键配对）。
-- **启动计划适配器层**：`LaunchKind/.web/.hostedRuntime/.notPlanned` + 八个引擎的适配器注册表（web 三家 / rgss→mkxp-z 需 RTP / ons/kirikiri/flash→各自运行时 / renpy→评估中），未知引擎失败关闭；测试覆盖。
-- **合规基建**：LICENSE（GPL-2.0-or-later 声明 + GPLv2 组合说明 + 待补 COPYING.GPLv2 正文标注）；Agents.md 新增 ADR-0054～0057 四份上游选型记录（含来源链接、许可核对日期、关键条件）。
-- 测试新增：启动适配器 3 例、RGSSAD 3 例；累计 54 个测试方法。
+- 导入 ZIP、ZipCrypto、WinZip AES、7z AES 和文件夹；统一限制路径穿越、符号链接、文件数、单文件大小与总展开量。
+- 导入期识别/读取 RPA、XP3、RGSSAD、SWF/CWS、SAR/NSA，并保留原始游戏树供原生运行时直接挂载。
+- 八个引擎族均已连接可执行启动路径：Ren'Py 7/8、RGSS1/2/3、RPG Maker MV/MZ、ONScripter、Kirikiri2/Z、Flash、TyranoScript。
+- Web 游戏与 Ruffle 使用只读自定义 scheme、非持久 WebKit 数据仓和外部网络阻断；游戏 localStorage 映射至独立存档目录。
+- 原生引擎统一通过 `CYumeRuntimeBridge` 管理创建、启动、暂停、恢复、输入、停止、事件与原生视图。
+- RGSS 使用锁定的 Empo/mkxp-z、三套隔离 Ruby 对象和共享 SDL/ANGLE；支持用户导入并按游戏挂载 RTP。
+- ONS/Kirikiri 使用 AetherKiri 引擎 API、CPU RGBA 宿主画面、触控/键盘输入和本地存档。
+- Ren'Py 使用官方 Renios 8.5.3 与 7.8.7 两套隔离静态对象及匹配 Python 资源；保存路径固定到游戏独立目录，Python socket 在资源层禁用。
+- Flash 使用内嵌 Ruffle 0.5 WebAssembly 解释器；不使用 JIT、动态下载或远程脚本。
+- 游戏库、搜索/筛选、详情、封面、导入任务、删除、存档导入导出、RTP 管理、设置、四语言和虚拟控制均已接线。
+- 上游源码、官方二进制来源、commit、许可证与 SHA-256 已冻结在 `ThirdParty/RuntimeDependencies.lock.json`；许可证入口见 `LICENSE` 与 `NOTICE.md`。
 
-## 关键判断
+## 自动验证
 
-- RGSSAD v3 数据段有混淆表且 mkxp-z 运行时会自行挂载归档，Yume 读取器只做导入期诊断，v3 索引不实现——诚实边界优于半成品解密。
-- RTP 挂载根按 engineID 匹配游戏引擎；缺失时由运行时/诊断给出错误码，UI 不做静默兜底。
-- 启动计划层是未来把 `.hostedRuntime` 接到 C/FFI 桥的单一挂点；当前 PlaySessionCoordinator 行为不变（仅 web 三家可启动）。
+- Swift 包共 111 个测试通过，覆盖检测、导入、归档安全、存储、启动计划、会话与原生 ABI。
+- 全部 App/Core Swift 源文件通过 Swift 6 前端语法解析。
+- 四语言本地化键集合一致；运行时关键资源存在；依赖锁 JSON、Shell 语法、工程文件解析及 `git diff --check` 通过。
+- `Scripts/verify_pretest.sh` 可离线重复执行上述测试前门禁。
+- Xcode 构建阶段会校验并暂存 mkxp-z 官方固定产物，构建 AetherKiri，将 Ren'Py 双代静态库按官方依赖顺序合并为只暴露各自入口的 arm64 对象，并逐件校验架构和宿主所需符号。
 
-## 验证结果
+## 仍需在测试阶段验证
 
-- 全部 Swift 文件括号结构检查通过；四语言 182 键完全一致；`git diff --check` 通过；无凭据命中。
-- 未运行 swift test / iOS 构建（本环境无工具链）；所有新格式实现需合法夹具在 macOS 上回归。
+- 当前开发环境为 Linux，无法执行 Xcode iOS 链接、代码签名、模拟器或真机运行；这不再是功能代码缺口，而是下一阶段的平台验证。
+- 首次 macOS 构建会按锁文件下载约 3 组固定原生产物并从源码构建 AetherKiri，耗时和磁盘占用会明显高于普通 Swift 构建。
+- 真机需要逐引擎用合法自有游戏样本验证首帧、音视频、输入、旋转、暂停恢复、存档、峰值内存和退出行为。RGSS/Ren'Py 的嵌入式解释器具有进程级全局状态，跨游戏测试应为每个样本重新启动 App。
 
-## 阻塞
+## 测试入口
 
-- **唯一硬阻塞**：Swift 6/macOS Xcode 环境。没有它无法：① 编译复核全部代码 ② 验证 mkxp-z/Ruffle/ONScripter/krkrsdl2 的 iOS 静态构建 ③ 用真实游戏文件回归格式读取器。这是"多引擎真机可用"前必须由具备条件的环境完成的一步。
-
-## 唯一下一步
-
-在 macOS/Xcode 环境：① `swift test` 全绿 + iPhone/iPad 构建通过 ② 按 ADR-0054~0057 锁定各上游 commit 并试跑 iOS 静态构建 ③ 用自有夹具回归 XP3/RPA/SWF/RGSSAD/NSA 读取器。完成后即可把 `.hostedRuntime` 计划接到真实运行时桥。
+1. 在仓库根目录执行 `Scripts/verify_pretest.sh`。
+2. 使用 Xcode 26 打开 `Yume.xcodeproj`，选择 arm64 iOS 18+ 设备进行 Debug 构建。
+3. 按 Ren'Py 7、Ren'Py 8、RGSS1、RGSS2、RGSS3、MV、MZ、ONS、Kirikiri2/Z、SWF、Tyrano 的顺序执行合法样本矩阵。

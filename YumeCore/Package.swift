@@ -14,6 +14,10 @@ let package = Package(
         .library(name: "YumeInfrastructure", targets: ["YumeInfrastructure"]),
         .library(name: "YumeEngineHost", targets: ["YumeEngineHost"])
     ],
+    dependencies: [
+        .package(path: "../ThirdParty/PLzmaSDK"),
+        .package(path: "../ThirdParty/MinizipNG")
+    ],
     targets: [
         .target(name: "YumeDomain"),
         .target(
@@ -27,12 +31,23 @@ let package = Package(
             dependencies: ["YumeDomain"]
         ),
         .target(
+            name: "CYumeRuntimeBridge",
+            path: "Sources/CYumeRuntimeBridge",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "YumeInfrastructure",
-            dependencies: ["YumeDomain", "YumeApplication", "CYumeZlib"]
+            dependencies: [
+                "YumeDomain",
+                "YumeApplication",
+                "CYumeZlib",
+                .product(name: "CMinizipNG", package: "MinizipNG"),
+                .product(name: "PLzmaSDK-Static", package: "PLzmaSDK")
+            ]
         ),
         .target(
             name: "YumeEngineHost",
-            dependencies: ["YumeDomain"]
+            dependencies: ["YumeDomain", "CYumeRuntimeBridge"]
         ),
         .testTarget(
             name: "YumeDomainTests",
@@ -44,7 +59,16 @@ let package = Package(
         ),
         .testTarget(
             name: "YumeInfrastructureTests",
-            dependencies: ["YumeInfrastructure", "YumeApplication", "YumeDomain"]
+            dependencies: [
+                "YumeInfrastructure",
+                "YumeApplication",
+                "YumeDomain",
+                .product(name: "PLzmaSDK", package: "PLzmaSDK")
+            ]
+        ),
+        .testTarget(
+            name: "YumeEngineHostTests",
+            dependencies: ["YumeEngineHost", "YumeDomain"]
         )
     ]
 )

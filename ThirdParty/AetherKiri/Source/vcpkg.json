@@ -1,0 +1,130 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "krkr2",
+  "version-string": "1.5.0",
+  "dependencies": [
+    "7zip",
+    {
+      "name": "argparse",
+      "platform": "linux | windows | osx"
+    },
+    "boost-iostreams",
+    "bzip2",
+    {
+      "name": "boost-locale",
+      "default-features": false
+    },
+    {
+      "name": "bullet3",
+      "platform": "!emscripten"
+    },
+    "boost-phoenix",
+    "boost-spirit",
+    "curl",
+    {
+      "name": "breakpad",
+      "default-features": false,
+      "platform": "android"
+    },
+    {
+      "name": "catch2",
+      "default-features": false,
+      "platform": "!android & !ios & !emscripten"
+    },
+    "minizip",
+    "tinyxml2",
+    {
+      "name": "dirent",
+      "platform": "windows"
+    },
+    "ffmpeg",
+    "expat",
+    "fmt",
+    "freetype",
+    "jxrlib",
+    "libarchive",
+    "libxml2",
+    {
+      "name": "libgdiplus",
+      "platform": "!windows & !emscripten"
+    },
+    "libjpeg-turbo",
+    "lua",
+    {
+      "name": "libogg",
+      "platform": "android"
+    },
+    {
+      "name": "libpng",
+      "platform": "!linux"
+    },
+    "libvorbis",
+    "libwebp",
+    "lz4",
+    {
+      "name": "oboe",
+      "platform": "android"
+    },
+    "oniguruma",
+    "openal-soft",
+    {
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        {
+          "name": "openmp",
+          "platform": "!ios & !emscripten"
+        }
+      ]
+    },
+    {
+      "name": "opus",
+      "platform": "android"
+    },
+    {
+      "name": "opusfile",
+      "default-features": false
+    },
+    {
+      "name": "sdl2",
+      "default-features": false
+    },
+    {
+      "name": "sdl2-image",
+      "features": [
+        "libjpeg-turbo",
+        "libwebp"
+      ]
+    },
+    "sdl2-mixer",
+    {
+      "name": "sdl2-ttf",
+      "features": [
+        "harfbuzz"
+      ]
+    },
+    "spdlog",
+    "highway",
+    "uchardet",
+    "unrar",
+    {
+      "name": "vulkan-headers",
+      "platform": "osx"
+    },
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    "zstd"
+  ],
+  "overrides": [
+    {
+      "name": "opencv4",
+      "version": "4.7.0#6"
+    },
+    {
+      "name": "lua",
+      "version": "5.4.8"
+    }
+  ]
+}

@@ -53,7 +53,12 @@
 "import.result.partial.title" = "Import Partly Complete";
 "import.result.failure.title" = "Import Failed";
 "import.failure.archiveNotAvailable" = "This archive format is not supported yet. Select a ZIP archive or an extracted game folder.";
-"import.failure.encryptedArchive" = "This ZIP archive is encrypted. Password-protected archives are not supported yet.";
+"import.failure.encryptedArchive" = "The encrypted archive was not unlocked. No files were imported.";
+"import.password.title" = "Archive Password";
+"import.password.retry.title" = "Incorrect Password";
+"import.password.message" = "Enter the archive password. It is used only for this import and is never saved.";
+"import.password.placeholder" = "Password";
+"import.password.unlock" = "Unlock";
 "import.failure.unsupportedArchive" = "This ZIP archive uses a feature or compression method that Yume cannot safely extract.";
 "import.failure.unsafeArchive" = "Yume rejected this archive because it contains unsafe paths, links, duplicates, or excessive expansion.";
 "import.failure.insufficientStorage" = "There is not enough free storage to import this game safely.";
@@ -116,6 +121,7 @@
 "diagnostics.offline.message" = "Diagnostics remain on this device. Yume does not upload logs, crashes, or usage data.";
 "licenses.app.title" = "Yume";
 "licenses.app.message" = "Yume application code is proprietary. No third-party runtime component is included in this build.";
+"licenses.thirdparty.title" = "Third-party components";
 "licenses.system.title" = "Apple System Frameworks";
 "licenses.system.message" = "This build uses SwiftUI, Foundation, WebKit, and Uniform Type Identifiers provided by the operating system.";
 "privacy.offline.title" = "Offline operation";

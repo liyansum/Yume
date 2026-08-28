@@ -93,6 +93,7 @@ public struct NScripterArchive: Sendable {
         guard fileSize >= UInt64(Self.headerByteCount) else { throw NSArcError.truncatedDirectory }
 
         let header = try Self.read(handle: handle, byteCount: Self.headerByteCount)
+        _ = try Self.formatKind(for: header.prefix(3))
         var headerReader = DirectoryReader(data: header)
         try headerReader.skip(3)
         let declaredEntryCount = Int(try headerReader.readUInt16())
@@ -197,9 +198,13 @@ public struct NScripterArchive: Sendable {
             defer { try? output.close() }
 
             var copied: UInt64 = 0
-            while true {
+            while copied < entry.byteCount {
                 try Task.checkCancellation()
-                guard let chunk = try handle.read(upToCount: Self.copyBufferByteCount),
+                let requested = Int(min(
+                    UInt64(Self.copyBufferByteCount),
+                    entry.byteCount - copied
+                ))
+                guard let chunk = try handle.read(upToCount: requested),
                       !chunk.isEmpty
                 else { break }
                 let moved = copied.addingReportingOverflow(UInt64(chunk.count))

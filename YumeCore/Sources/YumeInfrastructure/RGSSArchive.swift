@@ -59,7 +59,11 @@ public struct RGSSArchive: Sendable {
 
     public func index(at url: URL) throws -> [RGSSADEntry] {
         guard url.isFileURL else { throw RGSSADError.sourceIsNotFileURL }
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        let values = try url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey
+        ])
         guard values.isSymbolicLink != true else { throw RGSSADError.sourceIsSymbolicLink }
         guard values.isRegularFile == true else { throw RGSSADError.sourceMissing }
 
@@ -142,6 +146,9 @@ public struct RGSSArchive: Sendable {
                     RGSSADEntry(relativePath: relativePath, offset: offset, byteCount: size)
                 )
                 minimumDataOffset = offset + size
+                if UInt64(Self.headerV1.count + reader.consumedByteCount) >= entries[0].offset {
+                    break
+                }
             } catch let error as RGSSADError {
                 throw error
             } catch {
@@ -165,7 +172,9 @@ public struct RGSSArchive: Sendable {
                 throw RGSSADError.outOfBounds
             }
             try handle.seek(toOffset: entry.offset)
-            FileManager.default.createFile(atPath: destinationURL.path, contents: nil)
+            guard FileManager.default.createFile(atPath: destinationURL.path, contents: nil) else {
+                throw RGSSADError.outOfBounds
+            }
             let output = try FileHandle(forWritingTo: destinationURL)
             defer { try? output.close() }
 
@@ -190,15 +199,18 @@ private struct SequentialReader {
     private var buffer: [UInt8] = []
     private var position = 0
     private var exhausted = false
+    private(set) var consumedByteCount = 0
 
     init(handle: FileHandle) {
         self.handle = handle
     }
 
     var hasBytes: Bool {
-        if position < buffer.count { return true }
-        refill()
-        return position < buffer.count
+        mutating get {
+            if position < buffer.count { return true }
+            refill()
+            return position < buffer.count
+        }
     }
 
     mutating func readByte() throws -> UInt8 {
@@ -206,7 +218,10 @@ private struct SequentialReader {
             refill()
             guard position < buffer.count else { throw RGSSADError.truncatedIndex }
         }
-        defer { position += 1 }
+        defer {
+            position += 1
+            consumedByteCount += 1
+        }
         return buffer[position]
     }
 

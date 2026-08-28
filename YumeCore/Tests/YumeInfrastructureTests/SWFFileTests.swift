@@ -25,21 +25,26 @@ final class SWFFileTests: XCTestCase {
         XCTAssertEqual(inspection.tagSummaries.map(\.code), [9, 69, 0])
     }
 
-    func testCompressedHeaderOnlyAndLZMARejected() throws {
+    func testCompressedSWFAndLZMARejected() throws {
         let fixture = try SWFFixture()
         defer { fixture.remove() }
+        let rawBody = SWFBuilder()
+            .rect(minX: 0, maxX: 3200, minY: 0, maxY: 1800)
+            .frame(rateRaw: 0x1800, count: 1)
+            .end()
+            .build()
         try fixture.write(
             signature: "CWS",
-            version: 32,
-            declaredByteCount: 4096,
-            body: Data(repeating: 0x11, count: 64)
+            version: 10,
+            declaredByteCount: 8 + rawBody.count,
+            body: zlibStored(rawBody)
         )
         let compressed = try SWFFileParser().inspect(at: fixture.archiveURL)
 
         XCTAssertEqual(compressed.compressionKind, .deflate)
-        XCTAssertEqual(compressed.version, 32)
-        XCTAssertNil(compressed.frameSize)
-        XCTAssertTrue(compressed.tagSummaries.isEmpty)
+        XCTAssertEqual(compressed.version, 10)
+        XCTAssertEqual(compressed.frameSize?.maxX, 3200)
+        XCTAssertEqual(compressed.tagSummaries.map(\.code), [0])
 
         try fixture.write(
             signature: "ZWS",
@@ -60,6 +65,30 @@ final class SWFFileTests: XCTestCase {
         XCTAssertThrowsError(try SWFFileParser().inspect(at: fixture.archiveURL)) { error in
             XCTAssertEqual(error as? SWFError, .invalidSignature)
         }
+    }
+
+    private func zlibStored(_ raw: Data) -> Data {
+        precondition(raw.count <= 65_535)
+        var result = Data([0x78, 0x01, 0x01])
+        let length = UInt16(raw.count)
+        let complement = ~length
+        result.append(UInt8(length & 0xff))
+        result.append(UInt8(length >> 8))
+        result.append(UInt8(complement & 0xff))
+        result.append(UInt8(complement >> 8))
+        result.append(raw)
+        var a: UInt32 = 1
+        var b: UInt32 = 0
+        for byte in raw {
+            a = (a + UInt32(byte)) % 65_521
+            b = (b + a) % 65_521
+        }
+        let checksum = (b << 16) | a
+        result.append(UInt8((checksum >> 24) & 0xff))
+        result.append(UInt8((checksum >> 16) & 0xff))
+        result.append(UInt8((checksum >> 8) & 0xff))
+        result.append(UInt8(checksum & 0xff))
+        return result
     }
 }
 
@@ -95,41 +124,44 @@ private struct SWFFixture {
 private struct SWFBuilder {
     private var body = Data()
 
-    mutating func rect(minX: Int, maxX: Int, minY: Int, maxY: Int) -> SWFBuilder {
+    func rect(minX: Int, maxX: Int, minY: Int, maxY: Int) -> SWFBuilder {
+        var copy = self
         let bits = 16
-        appendBits(UInt64(bits), count: 5)
+        copy.appendBits(UInt64(bits), count: 5)
         for value in [minX, maxX, minY, maxY] {
-            appendSignedBits(Int64(value), count: bits)
+            copy.appendSignedBits(Int64(value), count: bits)
         }
-        alignToByte()
-        return self
+        copy.alignToByte()
+        return copy
     }
 
-    mutating func frame(rateRaw: UInt16, count: UInt16) -> SWFBuilder {
-        body.append(UInt8(rateRaw & 0xFF))
-        body.append(UInt8(rateRaw >> 8))
-        body.append(UInt8(count & 0xFF))
-        body.append(UInt8(count >> 8))
-        return self
+    func frame(rateRaw: UInt16, count: UInt16) -> SWFBuilder {
+        var copy = self
+        copy.body.append(UInt8(rateRaw & 0xFF))
+        copy.body.append(UInt8(rateRaw >> 8))
+        copy.body.append(UInt8(count & 0xFF))
+        copy.body.append(UInt8(count >> 8))
+        return copy
     }
 
-    mutating func tag(code: UInt16, length: UInt32) -> SWFBuilder {
+    func tag(code: UInt16, length: UInt32) -> SWFBuilder {
+        var copy = self
         if length < 0x3F {
             let combined = (code << 6) | UInt16(length)
-            body.append(UInt8(combined & 0xFF))
-            body.append(UInt8(combined >> 8))
+            copy.body.append(UInt8(combined & 0xFF))
+            copy.body.append(UInt8(combined >> 8))
         } else {
             let combined = (code << 6) | 0x3F
-            body.append(UInt8(combined & 0xFF))
-            body.append(UInt8(combined >> 8))
+            copy.body.append(UInt8(combined & 0xFF))
+            copy.body.append(UInt8(combined >> 8))
             var longLength = length.littleEndian
-            withUnsafeBytes(of: &longLength) { body.append(contentsOf: $0) }
+            withUnsafeBytes(of: &longLength) { copy.body.append(contentsOf: $0) }
         }
-        body.append(Data(repeating: 0xAB, count: Int(length)))
-        return self
+        copy.body.append(Data(repeating: 0xAB, count: Int(length)))
+        return copy
     }
 
-    mutating func end() -> SWFBuilder {
+    func end() -> SWFBuilder {
         tag(code: 0, length: 0)
     }
 

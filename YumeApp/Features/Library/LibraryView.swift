@@ -18,6 +18,7 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var sort = LibrarySort.recentlyPlayed
     @State private var presentsFileImporter = false
+    @State private var archivePassword = ""
 
     private var layout: LayoutMode {
         get {
@@ -65,7 +66,7 @@ struct LibraryView: View {
         .toolbar { toolbarContent }
         .fileImporter(
             isPresented: $presentsFileImporter,
-            allowedContentTypes: [.folder, .zip],
+            allowedContentTypes: [.folder, .zip, UTType(filenameExtension: "7z") ?? .data],
             allowsMultipleSelection: true,
             onCompletion: handleFileSelection
         )
@@ -80,6 +81,22 @@ struct LibraryView: View {
             }
         } message: {
             Text(importAlertMessage)
+        }
+        .alert(archivePasswordTitle, isPresented: archivePasswordBinding) {
+            SecureField("import.password.placeholder", text: $archivePassword)
+                .textContentType(.password)
+            Button("common.cancel", role: .cancel) {
+                archivePassword = ""
+                model.cancelArchivePassword()
+            }
+            Button("import.password.unlock") {
+                let password = archivePassword
+                archivePassword = ""
+                model.submitArchivePassword(password)
+            }
+            .disabled(archivePassword.isEmpty)
+        } message: {
+            Text("import.password.message")
         }
         .sheet(isPresented: detectionChoiceBinding) {
             if let choice = model.detectionChoice {
@@ -228,6 +245,24 @@ struct LibraryView: View {
             get: { model.duplicateChoice != nil },
             set: { if !$0, model.duplicateChoice != nil { model.resolveDuplicateChoice(.cancel) } }
         )
+    }
+
+    private var archivePasswordBinding: Binding<Bool> {
+        Binding(
+            get: { model.archivePasswordChoice != nil },
+            set: { presented in
+                if !presented, model.archivePasswordChoice != nil {
+                    archivePassword = ""
+                    model.cancelArchivePassword()
+                }
+            }
+        )
+    }
+
+    private var archivePasswordTitle: LocalizedStringKey {
+        model.archivePasswordChoice?.isRetry == true
+            ? "import.password.retry.title"
+            : "import.password.title"
     }
 
     private var importAlertTitle: LocalizedStringKey {

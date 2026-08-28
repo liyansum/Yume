@@ -14,6 +14,9 @@ final class AppModel {
     struct DuplicateChoice: Equatable {
         let existingGame: ImportedGame
     }
+    struct ArchivePasswordChoice: Equatable {
+        let isRetry: Bool
+    }
     struct ImportNotice: Identifiable, Equatable {
         enum Kind: Equatable {
             case success(count: Int)
@@ -50,6 +53,7 @@ final class AppModel {
     private var hasLoaded = false
     private var detectionContinuation: CheckedContinuation<ProbeResult?, Never>?
     private var duplicateContinuation: CheckedContinuation<DuplicateImportResolution, Never>?
+    private var archivePasswordContinuation: CheckedContinuation<String?, Never>?
 
     private(set) var games: [ImportedGame] = []
     private(set) var isLoadingLibrary = false
@@ -58,10 +62,11 @@ final class AppModel {
     private(set) var importProgress: GameImportProgress?
     private(set) var importNotice: ImportNotice?
     private(set) var recoveryIssueCount = 0
-    private(set) var activeGame: GameContentLocation?
+    private(set) var activeSession: GamePlaySession?
     private(set) var playbackFailed = false
     private(set) var detectionChoice: DetectionChoice?
     private(set) var duplicateChoice: DuplicateChoice?
+    private(set) var archivePasswordChoice: ArchivePasswordChoice?
     private(set) var diagnosticEntryCount = 0
     private(set) var diagnosticExportURL: URL?
     private(set) var recoveredTasks: [StagingManifest] = []
@@ -110,7 +115,8 @@ final class AppModel {
         let playSessions = PlaySessionCoordinator(
             library: storage,
             contentProvider: storage,
-            catalog: catalog
+            catalog: catalog,
+            runtimePackageStore: storage
         )
         return AppModel(
             library: storage,
@@ -186,12 +192,59 @@ final class AppModel {
                         resolveDuplicate: duplicateResolver
                     )
                 } else if url.pathExtension.lowercased() == "zip" {
-                    _ = try await importer.importZIP(
-                        at: url,
-                        progress: progressHandler,
-                        resolveDetection: detectionResolver,
-                        resolveDuplicate: duplicateResolver
-                    )
+                    var password: String?
+                    var isRetry = false
+                    while true {
+                        do {
+                            _ = try await importer.importZIP(
+                                at: url,
+                                password: password,
+                                progress: progressHandler,
+                                resolveDetection: detectionResolver,
+                                resolveDuplicate: duplicateResolver
+                            )
+                            break
+                        } catch SafeZIPError.passwordRequired {
+                            guard let entered = await resolveArchivePassword(isRetry: isRetry) else {
+                                throw ImportNotice.Failure.encryptedArchive
+                            }
+                            password = entered
+                            isRetry = true
+                        } catch SafeZIPError.incorrectPasswordOrCorruptArchive {
+                            guard let entered = await resolveArchivePassword(isRetry: true) else {
+                                throw ImportNotice.Failure.encryptedArchive
+                            }
+                            password = entered
+                            isRetry = true
+                        }
+                    }
+                } else if url.pathExtension.lowercased() == "7z" {
+                    var password: String?
+                    var isRetry = false
+                    while true {
+                        do {
+                            _ = try await importer.import7z(
+                                at: url,
+                                password: password,
+                                progress: progressHandler,
+                                resolveDetection: detectionResolver,
+                                resolveDuplicate: duplicateResolver
+                            )
+                            break
+                        } catch Safe7zError.passwordRequired {
+                            guard let entered = await resolveArchivePassword(isRetry: isRetry) else {
+                                throw ImportNotice.Failure.encryptedArchive
+                            }
+                            password = entered
+                            isRetry = true
+                        } catch Safe7zError.incorrectPasswordOrCorruptArchive {
+                            guard let entered = await resolveArchivePassword(isRetry: true) else {
+                                throw ImportNotice.Failure.encryptedArchive
+                            }
+                            password = entered
+                            isRetry = true
+                        }
+                    }
                 } else {
                     throw ImportNotice.Failure.archiveNotAvailable
                 }
@@ -215,7 +268,8 @@ final class AppModel {
                 break
             } catch let error as SafeZIPError {
                 switch error {
-                case .encryptedEntryUnsupported:
+                case .encryptedEntryUnsupported, .passwordRequired,
+                     .incorrectPasswordOrCorruptArchive:
                     failure = .encryptedArchive
                 case .multiDiskArchiveUnsupported, .unsupportedCompressionMethod,
                      .unsupportedFilenameEncoding:
@@ -225,6 +279,20 @@ final class AppModel {
                      .expandedSizeLimitExceeded, .compressionRatioLimitExceeded:
                     failure = .unsafeArchive
                 default:
+                    failure = .unreadable
+                }
+                break
+            } catch let error as Safe7zError {
+                switch error {
+                case .passwordRequired, .incorrectPasswordOrCorruptArchive:
+                    failure = .encryptedArchive
+                case .unsafePath, .duplicatePath, .entryLimitExceeded,
+                     .pathLimitExceeded, .expandedSizeLimitExceeded,
+                     .compressionRatioLimitExceeded:
+                    failure = .unsafeArchive
+                case .invalidArchive, .sourceIsNotFileURL, .sourceMissing,
+                     .sourceIsSymbolicLink, .destinationAlreadyExists,
+                     .extractionFailed:
                     failure = .unreadable
                 }
                 break
@@ -287,6 +355,29 @@ final class AppModel {
         continuation?.resume(returning: resolution)
     }
 
+    func submitArchivePassword(_ password: String) {
+        guard !password.isEmpty else { return }
+        archivePasswordChoice = nil
+        let continuation = archivePasswordContinuation
+        archivePasswordContinuation = nil
+        continuation?.resume(returning: password)
+    }
+
+    func cancelArchivePassword() {
+        archivePasswordChoice = nil
+        let continuation = archivePasswordContinuation
+        archivePasswordContinuation = nil
+        continuation?.resume(returning: nil)
+    }
+
+    private func resolveArchivePassword(isRetry: Bool) async -> String? {
+        guard archivePasswordContinuation == nil else { return nil }
+        return await withCheckedContinuation { continuation in
+            archivePasswordChoice = ArchivePasswordChoice(isRetry: isRetry)
+            archivePasswordContinuation = continuation
+        }
+    }
+
     private func resolveDuplicate(_ existingGame: ImportedGame) async -> DuplicateImportResolution {
         guard duplicateContinuation == nil else { return .cancel }
         return await withCheckedContinuation { continuation in
@@ -298,7 +389,7 @@ final class AppModel {
     func launch(_ game: ImportedGame) async {
         playbackFailed = false
         do {
-            activeGame = try await playSessions.start(gameID: game.id)
+            activeSession = try await playSessions.start(gameID: game.id)
         } catch {
             playbackFailed = true
         }
@@ -318,7 +409,7 @@ final class AppModel {
 
     func stopPlaying(markAsPlayed: Bool = true) async {
         let stoppedGameID = await playSessions.stop()
-        activeGame = nil
+        activeSession = nil
         guard markAsPlayed, let gameID = stoppedGameID else { return }
         try? await library.markPlayed(id: gameID, at: Date())
         await reloadLibrary()

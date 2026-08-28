@@ -1,0 +1,35 @@
+# Loaded by the bundled Ren'Py launcher before the engine imports networking.
+# Yume's native runtimes are intentionally offline-only.
+import socket
+try:
+    import _socket
+except ImportError:
+    _socket = None
+
+class _YumeOfflineSocket(object):
+    def __init__(self, *args, **kwargs):
+        raise OSError("Networking is disabled by Yume")
+
+def _yume_offline_connection(*args, **kwargs):
+    raise OSError("Networking is disabled by Yume")
+
+def _yume_offline_resolution(*args, **kwargs):
+    raise socket.gaierror("Networking is disabled by Yume")
+
+socket.socket = _YumeOfflineSocket
+socket.SocketType = _YumeOfflineSocket
+socket.create_connection = _yume_offline_connection
+socket.getaddrinfo = _yume_offline_resolution
+if hasattr(socket, "socketpair"):
+    socket.socketpair = _yume_offline_connection
+if hasattr(socket, "fromfd"):
+    socket.fromfd = _yume_offline_connection
+if hasattr(socket, "create_server"):
+    socket.create_server = _yume_offline_connection
+if _socket is not None:
+    _socket.socket = _YumeOfflineSocket
+    if hasattr(_socket, "SocketType"):
+        _socket.SocketType = _YumeOfflineSocket
+    _socket.getaddrinfo = _yume_offline_resolution
+    if hasattr(_socket, "socketpair"):
+        _socket.socketpair = _yume_offline_connection

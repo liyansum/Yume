@@ -63,9 +63,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A70000000000000000000002 /* Build configuration list for PBXNativeTarget "Yume" */;
 			buildPhases = (
+				A40000000000000000000004 /* Build Native Runtimes */,
 				A40000000000000000000002 /* Sources */,
 				A40000000000000000000001 /* Frameworks */,
 				A40000000000000000000003 /* Resources */,
+				A40000000000000000000005 /* Copy Runtime Resource Trees */,
 			);
 			buildRules = (
 			);
@@ -134,6 +136,60 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A40000000000000000000004 /* Build Native Runtimes */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Native Runtimes";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
+				"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
+				"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-modern.o",
+				"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-legacy.o",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"$SRCROOT/Scripts/build_native_runtimes.sh\" \"$PLATFORM_NAME\"\n";
+		};
+		A40000000000000000000005 /* Copy Runtime Resource Trees */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/ThirdParty/BundledResources/Runtimes",
+				"$(SRCROOT)/ThirdParty/BundledResources/Ruby",
+				"$(SRCROOT)/ThirdParty/BundledResources/Assets.bundle",
+			);
+			name = "Copy Runtime Resource Trees";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Runtimes/RenPyModern/base/main.py",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Runtimes/RenPyLegacy/base/main.py",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Runtimes/Ruffle/ruffle.js",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Runtimes/AetherKiri/default.otf",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Ruby/3.1.0/English.rb",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Assets.bundle/Shaders/simple.frag",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"$SRCROOT/Scripts/copy_bundled_resources.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A40000000000000000000002 /* Sources */ = {
@@ -270,6 +326,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Yume;
@@ -278,7 +335,90 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/include/SDL2";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/angle/$(PLATFORM_NAME)/lib",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
+					"-Wl,-force_load,$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp18-merged.o",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp19-merged.o",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp31-merged.o",
+					"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-modern.o",
+					"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-legacy.o",
+					"-lSDL2",
+					"-lSDL2_image",
+					"-lSDL2_sound",
+					"-lSDL2_ttf",
+					"-lfreetype",
+					"-lpixman-1",
+					"-lpng16",
+					"-logg",
+					"-lvorbis",
+					"-lvorbisfile",
+					"-ltheora",
+					"-ltheoradec",
+					"-lphysfs",
+					"-luchardet",
+					"-lopenal",
+					"-lssl",
+					"-lcrypto",
+					"-larchive",
+					"-ldl",
+					"-lpthread",
+					"-lANGLE_static",
+					"-lEGL_static",
+					"-lGLESv2_static",
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					CoreGraphics,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					CoreMedia,
+					"-framework",
+					CoreVideo,
+					"-framework",
+					GameController,
+					"-framework",
+					CoreMotion,
+					"-weak_framework",
+					CoreBluetooth,
+					"-weak_framework",
+					CoreHaptics,
+					"-framework",
+					CoreServices,
+					"-framework",
+					ImageIO,
+					"-framework",
+					MobileCoreServices,
+					"-framework",
+					Metal,
+					"-framework",
+					MetalKit,
+					"-framework",
+					OpenGLES,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					VideoToolbox,
+					"-liconv",
+					"-lz",
+					"-lbz2",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.yume.development;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -298,6 +438,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Yume;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.games";
@@ -305,7 +446,90 @@
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/include/SDL2";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/angle/$(PLATFORM_NAME)/lib",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib",
+				);
 				MARKETING_VERSION = 0.1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
+					"-Wl,-force_load,$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp18-merged.o",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp19-merged.o",
+					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp31-merged.o",
+					"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-modern.o",
+					"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-legacy.o",
+					"-lSDL2",
+					"-lSDL2_image",
+					"-lSDL2_sound",
+					"-lSDL2_ttf",
+					"-lfreetype",
+					"-lpixman-1",
+					"-lpng16",
+					"-logg",
+					"-lvorbis",
+					"-lvorbisfile",
+					"-ltheora",
+					"-ltheoradec",
+					"-lphysfs",
+					"-luchardet",
+					"-lopenal",
+					"-lssl",
+					"-lcrypto",
+					"-larchive",
+					"-ldl",
+					"-lpthread",
+					"-lANGLE_static",
+					"-lEGL_static",
+					"-lGLESv2_static",
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					CoreGraphics,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					CoreMedia,
+					"-framework",
+					CoreVideo,
+					"-framework",
+					GameController,
+					"-framework",
+					CoreMotion,
+					"-weak_framework",
+					CoreBluetooth,
+					"-weak_framework",
+					CoreHaptics,
+					"-framework",
+					CoreServices,
+					"-framework",
+					ImageIO,
+					"-framework",
+					MobileCoreServices,
+					"-framework",
+					Metal,
+					"-framework",
+					MetalKit,
+					"-framework",
+					OpenGLES,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-framework",
+					VideoToolbox,
+					"-liconv",
+					"-lz",
+					"-lbz2",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.yume.development;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

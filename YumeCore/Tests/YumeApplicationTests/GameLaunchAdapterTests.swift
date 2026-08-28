@@ -17,13 +17,27 @@ final class GameLaunchAdapterTests: XCTestCase {
         XCTAssertEqual(rgss.kind, .hostedRuntime(runtimeIdentifier: "mkxp-z"))
         XCTAssertTrue(rgss.requiresUserRTP)
 
-        for engineID in ["onscripter", "kirikiri", "flash"] {
+        for engineID in ["onscripter", "kirikiri", "renpy"] {
             let plan = GameLaunchAdapters.plan(for: makeGame(engineID: engineID))
             guard case .hostedRuntime = plan.kind else {
                 return XCTFail("Expected hosted runtime for \(engineID)")
             }
             XCTAssertFalse(plan.requiresUserRTP)
         }
+        XCTAssertEqual(
+            GameLaunchAdapters.plan(for: makeGame(engineID: "onscripter")).kind,
+            .hostedRuntime(runtimeIdentifier: "aetherkiri-onscripter")
+        )
+        XCTAssertEqual(
+            GameLaunchAdapters.plan(for: makeGame(engineID: "kirikiri")).kind,
+            .hostedRuntime(runtimeIdentifier: "aetherkiri-kirikiri")
+        )
+
+        let flash = GameLaunchAdapters.plan(for: makeGame(engineID: "flash"))
+        XCTAssertEqual(
+            flash.kind,
+            .embeddedWebRuntime(runtimeIdentifier: "ruffle-web")
+        )
     }
 
     func testUnknownEnginesFailClosed() {

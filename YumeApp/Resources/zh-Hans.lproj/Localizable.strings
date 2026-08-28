@@ -53,7 +53,12 @@
 "import.result.partial.title" = "部分导入完成";
 "import.result.failure.title" = "导入失败";
 "import.failure.archiveNotAvailable" = "暂不支持这种压缩包格式。请选择 ZIP 压缩包或已解压的游戏文件夹。";
-"import.failure.encryptedArchive" = "此 ZIP 压缩包已加密，暂不支持需要密码的压缩包。";
+"import.failure.encryptedArchive" = "未能解锁加密压缩包，未导入任何文件。";
+"import.password.title" = "压缩包密码";
+"import.password.retry.title" = "密码不正确";
+"import.password.message" = "请输入压缩包密码。密码仅用于本次导入，不会保存。";
+"import.password.placeholder" = "密码";
+"import.password.unlock" = "解锁";
 "import.failure.unsupportedArchive" = "此 ZIP 使用了 Yume 无法安全解压的功能或压缩方式。";
 "import.failure.unsafeArchive" = "Yume 已拒绝此压缩包，因为其中包含不安全路径、链接、重复项目或异常膨胀内容。";
 "import.failure.insufficientStorage" = "可用空间不足，无法安全导入此游戏。";
@@ -116,6 +121,7 @@
 "diagnostics.offline.message" = "诊断数据仅保留在此设备上；Yume 不上传日志、崩溃或使用数据。";
 "licenses.app.title" = "Yume";
 "licenses.app.message" = "Yume 应用代码为专有代码。此构建未包含第三方运行时组件。";
+"licenses.thirdparty.title" = "第三方组件";
 "licenses.system.title" = "Apple 系统框架";
 "licenses.system.message" = "此构建使用操作系统提供的 SwiftUI、Foundation、WebKit 与统一类型标识框架。";
 "privacy.offline.title" = "离线运行";

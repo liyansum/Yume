@@ -1,0 +1,49 @@
+name: Format
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+
+# Format job verifies that the formatters would not modify any
+# tracked file. If they would, the job fails with a clear diff
+# so the contributor knows exactly what to run locally.
+
+jobs:
+  ruby:
+    name: Ruby (rubocop --autocorrect)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: false
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          # bundler-cache reads Gemfile.lock and caches gem installs
+          # across runs. Saves ~15s after first run.
+          bundler-cache: true
+
+      - name: rubocop --autocorrect (would-modify is failure)
+        run: |
+          bundle exec rubocop --autocorrect-all --format quiet
+          # Scope the diff to the rubocop-managed paths so unrelated
+          # working-tree state (uninitialised hmode7 submodule on a
+          # shallow checkout, etc.) doesn't trip the check.
+          if ! git diff --exit-code -- scripts/preload scripts/postload; then
+            echo "::error::rubocop would modify files. Run \`bundle exec rubocop --autocorrect-all\` locally and commit."
+            exit 1
+          fi
+
+  # Aggregate gate whose check-run name matches the ruleset's required
+  # "Format" context exactly (same pattern as empo-app's workflows).
+  summary:
+    name: Format
+    needs: [ruby]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every job passed
+        run: |
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]

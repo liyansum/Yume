@@ -1,5 +1,6 @@
 #include "CYumeZlib.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -137,7 +138,6 @@ int32_t yume_zlib_inflate_to_file(
     unsigned char output_buffer[YUME_BUFFER_SIZE];
     uint64_t remaining = compressed_size;
     uint64_t written = 0;
-    uLong adler = adler32(0L, Z_NULL, 0);
     int32_t result = YUME_ZIP_OK;
 
     z_stream stream;
@@ -147,7 +147,7 @@ int32_t yume_zlib_inflate_to_file(
     } else {
         int z_result = Z_OK;
         while (result == YUME_ZIP_OK && z_result != Z_STREAM_END) {
-            if (stream.avail_in == 0 && remaining > 4) {
+            if (stream.avail_in == 0 && remaining > 0) {
                 size_t requested = remaining > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (size_t)remaining;
                 size_t read_count = fread(input_buffer, 1, requested, input);
                 if (read_count == 0) {
@@ -176,10 +176,9 @@ int32_t yume_zlib_inflate_to_file(
                     result = YUME_ZIP_WRITE_FAILED;
                     break;
                 }
-                adler = adler32(adler, output_buffer, (uInt)produced);
                 written += produced;
             }
-            if (stream.avail_in == 0 && remaining <= 4 && z_result != Z_STREAM_END) {
+            if (stream.avail_in == 0 && remaining == 0 && z_result != Z_STREAM_END) {
                 result = YUME_ZIP_INFLATE_FAILED;
                 break;
             }
@@ -188,20 +187,91 @@ int32_t yume_zlib_inflate_to_file(
 
         if (result == YUME_ZIP_OK && written != expected_size) result = YUME_ZIP_SIZE_MISMATCH;
 
-        if (result == YUME_ZIP_OK && remaining >= 4) {
-            unsigned char trailer[4];
-            if (fread(trailer, 1, 4, input) == 4) {
-                uint32_t stored = (uint32_t)trailer[0]
-                    | ((uint32_t)trailer[1] << 8)
-                    | ((uint32_t)trailer[2] << 16)
-                    | ((uint32_t)trailer[3] << 24);
-                if ((uint32_t)adler != stored) result = YUME_ZIP_CRC_MISMATCH;
-            }
-        }
+        if (result == YUME_ZIP_OK && remaining != 0) result = YUME_ZIP_SIZE_MISMATCH;
     }
 
     if (fclose(input) != 0 && result == YUME_ZIP_OK) result = YUME_ZIP_READ_FAILED;
     if (fclose(output) != 0 && result == YUME_ZIP_OK) result = YUME_ZIP_WRITE_FAILED;
+    return result;
+}
+
+int32_t yume_deflate_raw_to_file(
+    const char *input_path,
+    uint64_t data_offset,
+    uint64_t compressed_size,
+    const char *output_path,
+    uint64_t expected_size
+) {
+    FILE *input = fopen(input_path, "rb");
+    if (input == NULL) return YUME_ZIP_INPUT_OPEN_FAILED;
+    FILE *output = fopen(output_path, "wb");
+    if (output == NULL) {
+        fclose(input);
+        return YUME_ZIP_OUTPUT_OPEN_FAILED;
+    }
+    if (fseeko(input, (off_t)data_offset, SEEK_SET) != 0) {
+        fclose(input);
+        fclose(output);
+        return YUME_ZIP_SEEK_FAILED;
+    }
+
+    unsigned char input_buffer[YUME_BUFFER_SIZE];
+    unsigned char output_buffer[YUME_BUFFER_SIZE];
+    uint64_t remaining = compressed_size;
+    uint64_t written = 0;
+    int32_t result = YUME_ZIP_OK;
+
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
+        result = YUME_ZIP_INFLATE_FAILED;
+    } else {
+        int z_result = Z_OK;
+        while (result == YUME_ZIP_OK && z_result != Z_STREAM_END) {
+            if (stream.avail_in == 0 && remaining > 0) {
+                size_t requested = remaining > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (size_t)remaining;
+                size_t read_count = fread(input_buffer, 1, requested, input);
+                if (read_count == 0) {
+                    result = YUME_ZIP_READ_FAILED;
+                    break;
+                }
+                stream.next_in = input_buffer;
+                stream.avail_in = (uInt)read_count;
+                remaining -= read_count;
+            }
+
+            stream.next_out = output_buffer;
+            stream.avail_out = YUME_BUFFER_SIZE;
+            z_result = inflate(&stream, Z_NO_FLUSH);
+            if (z_result != Z_OK && z_result != Z_STREAM_END) {
+                result = YUME_ZIP_INFLATE_FAILED;
+                break;
+            }
+            size_t produced = YUME_BUFFER_SIZE - stream.avail_out;
+            if (produced > 0) {
+                if (written > expected_size || produced > expected_size - written) {
+                    result = YUME_ZIP_SIZE_MISMATCH;
+                    break;
+                }
+                if (fwrite(output_buffer, 1, produced, output) != produced) {
+                    result = YUME_ZIP_WRITE_FAILED;
+                    break;
+                }
+                written += produced;
+            }
+            if (stream.avail_in == 0 && remaining == 0 && z_result != Z_STREAM_END) {
+                result = YUME_ZIP_INFLATE_FAILED;
+                break;
+            }
+        }
+        inflateEnd(&stream);
+
+        if (result == YUME_ZIP_OK && remaining != 0) result = YUME_ZIP_SIZE_MISMATCH;
+    }
+
+    if (fclose(input) != 0 && result == YUME_ZIP_OK) result = YUME_ZIP_READ_FAILED;
+    if (fclose(output) != 0 && result == YUME_ZIP_OK) result = YUME_ZIP_WRITE_FAILED;
+    if (result == YUME_ZIP_OK && written != expected_size) result = YUME_ZIP_SIZE_MISMATCH;
     return result;
 }
 
@@ -217,9 +287,7 @@ int32_t yume_zlib_inflate_mem(
     }
     *written_byte_count = 0;
 
-    uint64_t consumed = 0;
     uint64_t written = 0;
-    uLong adler = adler32(0L, Z_NULL, 0);
     int32_t result = YUME_ZIP_OK;
 
     z_stream stream;
@@ -228,8 +296,12 @@ int32_t yume_zlib_inflate_mem(
         return YUME_ZIP_INFLATE_FAILED;
     }
 
-    stream.next_in = (Bytef *)(input_buffer + consumed);
-    stream.avail_in = compressed_size > 4 ? (uInt)(compressed_size - 4) : 0;
+    if (compressed_size > UINT_MAX) {
+        inflateEnd(&stream);
+        return YUME_ZIP_SIZE_MISMATCH;
+    }
+    stream.next_in = (Bytef *)input_buffer;
+    stream.avail_in = (uInt)compressed_size;
 
     int z_result = Z_OK;
     while (z_result != Z_STREAM_END) {
@@ -238,31 +310,24 @@ int32_t yume_zlib_inflate_mem(
             result = YUME_ZIP_SIZE_MISMATCH;
             break;
         }
+        uInt output_chunk = capacity_left > YUME_BUFFER_SIZE
+            ? YUME_BUFFER_SIZE
+            : (uInt)capacity_left;
         stream.next_out = output_buffer + written;
-        stream.avail_out = capacity_left > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (uInt)capacity_left;
+        stream.avail_out = output_chunk;
         z_result = inflate(&stream, Z_NO_FLUSH);
         if (z_result != Z_OK && z_result != Z_STREAM_END) {
             result = YUME_ZIP_INFLATE_FAILED;
             break;
         }
-        size_t produced = stream.avail_out < YUME_BUFFER_SIZE
-            ? ((capacity_left > YUME_BUFFER_SIZE ? YUME_BUFFER_SIZE : (uInt)capacity_left) - stream.avail_out)
-            : 0;
-        adler = adler32(adler, output_buffer + written, (uInt)produced);
+        size_t produced = output_chunk - stream.avail_out;
         written += produced;
     }
+    uInt unread_input = stream.avail_in;
     inflateEnd(&stream);
 
     if (result == YUME_ZIP_OK && written > output_capacity) result = YUME_ZIP_SIZE_MISMATCH;
-
-    if (result == YUME_ZIP_OK && compressed_size >= 4) {
-        const unsigned char *trailer = input_buffer + (compressed_size - 4);
-        uint32_t stored = (uint32_t)trailer[0]
-            | ((uint32_t)trailer[1] << 8)
-            | ((uint32_t)trailer[2] << 16)
-            | ((uint32_t)trailer[3] << 24);
-        if ((uint32_t)adler != stored) result = YUME_ZIP_CRC_MISMATCH;
-    }
+    if (result == YUME_ZIP_OK && unread_input != 0) result = YUME_ZIP_SIZE_MISMATCH;
 
     if (result == YUME_ZIP_OK) *written_byte_count = written;
     return result;

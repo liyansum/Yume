@@ -1,0 +1,108 @@
+/**
+ * @file engine_options.h
+ * @brief Well-known engine option key/value constants.
+ *
+ * These constants unify the option strings used across the C++ codebase
+ * (engine_api, EngineBootstrap) to avoid typos and ensure consistency.
+ */
+#ifndef KRKR2_ENGINE_OPTIONS_H_
+#define KRKR2_ENGINE_OPTIONS_H_
+
+/* ── Option Keys ────────────────────────────────────────────────── */
+
+/** Frame rate limit (0 = unlimited / follow vsync). */
+#define ENGINE_OPTION_FPS_LIMIT           "fps_limit"
+
+/** Render pipeline selection. */
+#define ENGINE_OPTION_RENDERER            "renderer"
+
+/** Host-facing render backend selection. */
+#define ENGINE_OPTION_RENDER_BACKEND      "render_backend"
+
+/** Select whether the host receives the logical surface or the unscaled
+ *  game frame. Raw source output is intended for a single downstream GPU
+ *  enhancement/upscale pipeline; it does not change engine input geometry. */
+#define ENGINE_OPTION_FRAME_OUTPUT        "frame_output"
+
+/** Maximum elapsed time, in milliseconds, applied to one Artemis visual
+ *  update. Zero disables host-side hitch smoothing. Script clocks, audio and
+ *  video continue to use the caller-provided elapsed time. */
+#define ENGINE_OPTION_ARTEMIS_MAX_VISUAL_DELTA_MS \
+  "artemis.max_visual_delta_ms"
+
+/** Memory profile ("balanced" / "aggressive").
+ *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
+#define ENGINE_OPTION_MEMORY_PROFILE      "memory_profile"
+
+/** Runtime memory budget in MB (0 = auto).
+ *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
+#define ENGINE_OPTION_MEMORY_BUDGET_MB    "memory_budget_mb"
+
+/** Memory governor log interval in milliseconds.
+ *  Consumed by the C++ memory governor via TVPGetCommandLine(). */
+#define ENGINE_OPTION_MEMORY_LOG_INTERVAL_MS "memory_log_interval_ms"
+
+/** PSB resource cache budget in MB. */
+#define ENGINE_OPTION_PSB_CACHE_MB        "psb_cache_mb"
+
+/** PSB resource cache max entry count. */
+#define ENGINE_OPTION_PSB_CACHE_ENTRIES   "psb_cache_entries"
+
+/** Archive cache max entry count. */
+#define ENGINE_OPTION_ARCHIVE_CACHE_COUNT "archive_cache_count"
+
+/** Auto path cache max entry count. */
+#define ENGINE_OPTION_AUTOPATH_CACHE_COUNT "autopath_cache_count"
+
+/** Enable plugin call tracing to plugin_trace.log ("0"/"1"). */
+#define ENGINE_OPTION_PLUGIN_TRACE "plugin_trace"
+
+/** Enable/disable runtime mock bypass ("0"/"1", default "1").
+ *  When disabled, missing plugins/classes cause real errors instead of
+ *  being silently absorbed by mock objects. Useful for debugging. */
+#define ENGINE_OPTION_MOCK_ENABLED "mock_enabled"
+
+/** Enable/disable krkr.console.log file output ("0"/"1", default "1").
+ *  Controls the TJS2 engine console log file written by TVPLogStreamHolder. */
+#define ENGINE_OPTION_CONSOLE_LOG_FILE "console_log_file"
+
+/** Enable/disable spdlog trace-level logging ("0"/"1", default "0").
+ *  When enabled, sets spdlog level to trace for maximum verbosity. */
+#define ENGINE_OPTION_TRACE_LOG "trace_log"
+
+/** Enable/disable auto-export of TJS scripts from XP3 ("0"/"1", default "0").
+ *  When enabled, disassembles bytecode and exports scripts during game load. */
+#define ENGINE_OPTION_EXPORT_SCRIPTS "export_scripts"
+
+/** Enable/disable appending recent engine logs to fatal error dialogs
+ *  ("0"/"1", default "0"). */
+#define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
+
+/** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
+#define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
+
+/** Enable/disable appending recent engine logs to fatal error dialogs
+ *  ("0"/"1", default "0"). */
+#define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
+
+/* ── Renderer Values ────────────────────────────────────────────── */
+
+#define ENGINE_RENDERER_GODOT_NATIVE      "godot_native"
+#define ENGINE_RENDERER_GPU_BRIDGE        "gpu_bridge"
+#define ENGINE_RENDERER_DEBUG_CPU         "debug_cpu"
+#define ENGINE_RENDERER_SOFTWARE          "software"
+
+#define ENGINE_RENDER_BACKEND_GODOT_NATIVE "GodotNative"
+#define ENGINE_RENDER_BACKEND_GPU_BRIDGE   "GpuBridge"
+#define ENGINE_RENDER_BACKEND_DEBUG_CPU    "DebugCpu"
+
+#define ENGINE_FRAME_OUTPUT_SURFACE        "surface"
+#define ENGINE_FRAME_OUTPUT_RAW_SOURCE     "raw_source"
+
+#define ENGINE_MEMORY_PROFILE_BALANCED    "balanced"
+#define ENGINE_MEMORY_PROFILE_AGGRESSIVE  "aggressive"
+
+#define ENGINE_PLUGIN_LOAD_MODE_KRKRSDL3  "krkrsdl3"
+#define ENGINE_PLUGIN_LOAD_MODE_AETHER_ALL "aether_all"
+
+#endif  /* KRKR2_ENGINE_OPTIONS_H_ */

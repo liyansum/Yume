@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <style>
+    html, body, #player { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #000; }
+    ruffle-player { width: 100%; height: 100%; }
+  </style>
+  <script>
+    window.RufflePlayer = window.RufflePlayer || {};
+    window.RufflePlayer.config = {
+      autoplay: "on",
+      unmuteOverlay: "hidden",
+      splashScreen: false,
+      letterbox: "on",
+      warnOnUnsupportedContent: true,
+      contextMenu: "off",
+      openUrlMode: "deny",
+      allowNetworking: "none"
+    };
+  </script>
+  <script src="ruffle.js"></script>
+</head>
+<body>
+  <div id="player"></div>
+  <script>
+    (() => {
+      const movie = new URLSearchParams(location.search).get("movie");
+      if (!movie) throw new Error("Missing movie URL");
+      const player = window.RufflePlayer.newest().createPlayer();
+      document.getElementById("player").appendChild(player);
+      player.ruffle().load({
+        url: movie,
+        autoplay: "on",
+        allowScriptAccess: false,
+        parameters: ""
+      });
+    })();
+  </script>
+</body>
+</html>
