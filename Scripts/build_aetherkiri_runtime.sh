@@ -55,6 +55,15 @@ if [[ -f "$artifact" ]] &&
     exit 0
 fi
 
+# Xcode shell phases export the active iPhone SDK and target flags globally.
+# vcpkg also builds host tools (pkgconf, meson helpers) which must remain
+# runnable macOS executables, so prevent those target settings from leaking
+# into host builds. The iOS target is fully described by the CMake options and
+# overlay triplet below.
+unset SDKROOT CC CXX LD AR AS NM RANLIB STRIP
+unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+unset IPHONEOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET
+
 mkdir -p "$(dirname "$vcpkg_root")" "$artifact_dir"
 if [[ ! -f "$vcpkg_root/.vcpkg-root" ]]; then
     if [[ -e "$vcpkg_root" ]]; then
@@ -71,7 +80,10 @@ if [[ ! -x "$vcpkg_root/vcpkg" ]]; then
 fi
 
 export VCPKG_ROOT="$vcpkg_root"
+export VCPKG_DEFAULT_BINARY_CACHE="${VCPKG_DEFAULT_BINARY_CACHE:-$project_root/.native-build/vcpkg-binary-cache}"
+mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
 cmake -S "$source_root" -B "$build_root" --fresh \
+    -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT="$sdk" \
