@@ -5,7 +5,12 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 project_root="$(cd "$script_dir/.." && pwd)"
 platform_name="${1:-${PLATFORM_NAME:-iphoneos}}"
-architecture="${CURRENT_ARCH:-arm64}"
+architecture="${CURRENT_ARCH:-}"
+if [[ -z "$architecture" || "$architecture" == "undefined_arch" ]]; then
+    architecture="${ARCHS:-}"
+    architecture="${architecture%% *}"
+    architecture="${architecture:-arm64}"
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]] || ! command -v xcrun >/dev/null 2>&1; then
     echo "Native runtime verification requires Xcode on macOS." >&2
