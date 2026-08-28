@@ -51,7 +51,7 @@ jobs:
             .native-build/downloads
             .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake') }}
           restore-keys: |
             yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-
             yume-native-cache-v3-${{ runner.os }}-${{ runner.arch }}-
@@ -84,7 +84,7 @@ jobs:
             .native-build/downloads
             .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake') }}
 
       - name: Package IPA
         run: |
