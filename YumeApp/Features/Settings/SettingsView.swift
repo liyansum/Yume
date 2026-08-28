@@ -246,7 +246,8 @@ private struct LicensesView: View {
                 Text("licenses.app.message")
             }
             Section("licenses.thirdparty.title") {
-                ForEach(bundledNotices, id: \.id) { notice in
+                ForEach(bundledNotices.indices, id: \.self) { index in
+                    let notice: Notice = bundledNotices[index]
                     VStack(alignment: .leading, spacing: 4) {
                         Text(notice.name)
                             .font(.subheadline.weight(.medium))
