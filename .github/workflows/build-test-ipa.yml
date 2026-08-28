@@ -37,10 +37,11 @@ jobs:
           xcodebuild -version
           swift --version
           cmake --version
-          brew install autoconf autoconf-archive automake libtool ninja
+          brew install autoconf autoconf-archive automake bison libtool ninja
           autoconf --version
           automake --version
           glibtoolize --version
+          "$(brew --prefix bison)/bin/bison" --version
           ninja --version
           df -h .
 
@@ -52,7 +53,7 @@ jobs:
             .native-build/downloads
             .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake', 'ThirdParty/AetherKiri/Source/vcpkg/ports/**') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build-test-ipa.yml', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake', 'ThirdParty/AetherKiri/Source/vcpkg/ports/**') }}
           restore-keys: |
             yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-
             yume-native-cache-v3-${{ runner.os }}-${{ runner.arch }}-
@@ -85,7 +86,7 @@ jobs:
             .native-build/downloads
             .native-build/vcpkg-downloads
             .native-build/vcpkg-binary-cache
-          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake', 'ThirdParty/AetherKiri/Source/vcpkg/ports/**') }}
+          key: yume-native-cache-v4-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build-test-ipa.yml', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake', 'ThirdParty/AetherKiri/Source/vcpkg/ports/**') }}
 
       - name: Package IPA
         run: |
