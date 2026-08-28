@@ -37,9 +37,10 @@ jobs:
           xcodebuild -version
           swift --version
           cmake --version
-          if ! command -v ninja >/dev/null 2>&1; then
-            brew install ninja
-          fi
+          brew install autoconf autoconf-archive automake libtool ninja
+          autoconf --version
+          automake --version
+          glibtoolize --version
           ninja --version
           df -h .
 
