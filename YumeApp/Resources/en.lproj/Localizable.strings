@@ -186,7 +186,7 @@
 "rtp.empty.message" = "Games that depend on standard assets need a locally imported runtime package.";
 "rtp.import.action" = "Import Package";
 "rtp.import.menu.title" = "Choose RPG Maker RTP";
-"rtp.import.menu.message" = "Choose the matching RPG Maker generation, then select either its asset root or a containing folder. Yume finds Audio and Graphics without changing the source.";
+"rtp.import.menu.message" = "Choose the matching RPG Maker generation, then select its asset root or an installer wrapper containing folders such as app and sys. Yume copies and finds Audio, Graphics or Fonts without changing the source.";
 "rtp.variant.xp" = "RPG Maker XP RTP";
 "rtp.variant.vx" = "RPG Maker VX RTP";
 "rtp.variant.vxAce" = "RPG Maker VX Ace RTP";
@@ -197,7 +197,7 @@
 "rtp.error.duplicate" = "That RPG Maker RTP generation is already imported. Delete the existing package before replacing it.";
 "rtp.error.notDirectory" = "The selected item is not an accessible folder.";
 "rtp.error.empty" = "The selected RTP folder contains no files.";
-"rtp.error.layout" = "No RPG Maker RTP asset root was found. Select a folder containing, or wrapping, both Audio and Graphics folders.";
+"rtp.error.layout" = "No RPG Maker RTP asset root was found. Select a folder containing, or wrapping, at least one Audio, Graphics or Fonts folder.";
 "rtp.error.ambiguous" = "More than one RTP asset root was found. Select the folder for one RPG Maker generation.";
 "rtp.error.unreadable" = "Yume could not read the selected folder. Check the Files provider permission and try again.";
 "rtp.error.copy" = "Yume found the RTP but could not safely copy every resource into local storage.";

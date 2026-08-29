@@ -186,7 +186,7 @@
 "rtp.empty.message" = "標準アセットに依存するゲームには、ローカルに取り込んだランタイムパッケージが必要です。";
 "rtp.import.action" = "パッケージを取り込む";
 "rtp.import.menu.title" = "RPG Maker RTP を選択";
-"rtp.import.menu.message" = "対応する RPG Maker の世代を選び、素材ルートまたはそれを含むフォルダを選択します。Yume は元のフォルダを変更せず Audio と Graphics を自動検出します。";
+"rtp.import.menu.message" = "対応する RPG Maker の世代を選び、素材ルートまたは app や sys などを含むインストーラーの外側のフォルダを選択します。Yume は元のフォルダを変更せずコピーし、Audio、Graphics、Fonts を自動検出します。";
 "rtp.variant.xp" = "RPG Maker XP RTP";
 "rtp.variant.vx" = "RPG Maker VX RTP";
 "rtp.variant.vxAce" = "RPG Maker VX Ace RTP";
@@ -197,7 +197,7 @@
 "rtp.error.duplicate" = "この世代の RPG Maker RTP は取り込み済みです。置き換えるには、先に既存のパッケージを削除してください。";
 "rtp.error.notDirectory" = "選択した項目はアクセス可能なフォルダではありません。";
 "rtp.error.empty" = "選択した RTP フォルダにファイルがありません。";
-"rtp.error.layout" = "RPG Maker RTP の素材ルートが見つかりません。Audio と Graphics の両方を含むフォルダ、またはその親フォルダを選択してください。";
+"rtp.error.layout" = "RPG Maker RTP の素材ルートが見つかりません。Audio、Graphics、Fonts のいずれかを含むフォルダ、またはその親フォルダを選択してください。";
 "rtp.error.ambiguous" = "複数の RTP 素材ルートが見つかりました。RPG Maker の世代を 1 つだけ含むフォルダを選択してください。";
 "rtp.error.unreadable" = "選択したフォルダを読み取れません。ファイルプロバイダの権限を確認して再試行してください。";
 "rtp.error.copy" = "RTP は見つかりましたが、すべての素材をローカルストレージへ安全にコピーできませんでした。";

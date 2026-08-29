@@ -233,17 +233,70 @@ final class LocalGameStorageTests: XCTestCase {
         XCTAssertEqual(aceMounts.map(\.lastPathComponent), ["rgss-vx-ace"])
     }
 
-    func testRPGMakerRTPImportRejectsIncompleteAndDuplicatePackagesPrecisely() async throws {
+    func testRPGMakerRTPImportAcceptsEachStandardAssetDirectoryAndInstallerWrappers() async throws {
         let fixture = try TemporaryStorageFixture()
         defer { fixture.remove() }
         let storage = LocalGameStorage(baseURL: fixture.storageRoot)
-        let audioOnly = fixture.container.appendingPathComponent("Audio", isDirectory: true)
-        try FileManager.default.createDirectory(at: audioOnly, withIntermediateDirectories: true)
-        try Data("sound".utf8).write(to: audioOnly.appendingPathComponent("sound.ogg"))
+
+        let layouts: [(RPGMakerRTPVariant, String)] = [
+            (.xp, "Audio"),
+            (.vx, "Graphics"),
+            (.vxAce, "Fonts")
+        ]
+        for (variant, assetDirectoryName) in layouts {
+            let wrapper = fixture.container.appendingPathComponent(
+                "RTP-\(variant.rawValue)",
+                isDirectory: true
+            )
+            let app = wrapper.appendingPathComponent("app", isDirectory: true)
+            let assetDirectory = app.appendingPathComponent(assetDirectoryName, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: assetDirectory,
+                withIntermediateDirectories: true
+            )
+            try Data(variant.rawValue.utf8).write(
+                to: assetDirectory.appendingPathComponent("asset.dat")
+            )
+            if variant == .xp {
+                let sys = wrapper.appendingPathComponent("sys", isDirectory: true)
+                try FileManager.default.createDirectory(at: sys, withIntermediateDirectories: true)
+                try Data("installer".utf8).write(to: sys.appendingPathComponent("setup.dat"))
+            }
+
+            let package = try await storage.importRPGMakerRTP(
+                variant: variant,
+                from: wrapper
+            )
+            XCTAssertEqual(package.fileCount, 1)
+            let importedRoot = storage.layout.rtp
+                .appendingPathComponent("rgss", isDirectory: true)
+                .appendingPathComponent(variant.packageID, isDirectory: true)
+            XCTAssertTrue(
+                FileManager.default.fileExists(
+                    atPath: importedRoot
+                        .appendingPathComponent("\(assetDirectoryName)/asset.dat")
+                        .path
+                )
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(
+                    atPath: importedRoot.appendingPathComponent("sys/setup.dat").path
+                )
+            )
+        }
+    }
+
+    func testRPGMakerRTPImportRejectsUnrelatedAndDuplicatePackagesPrecisely() async throws {
+        let fixture = try TemporaryStorageFixture()
+        defer { fixture.remove() }
+        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let unrelated = fixture.container.appendingPathComponent("unrelated", isDirectory: true)
+        try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+        try Data("not RTP".utf8).write(to: unrelated.appendingPathComponent("readme.txt"))
 
         do {
-            _ = try await storage.importRPGMakerRTP(variant: .vx, from: audioOnly)
-            XCTFail("Expected an incomplete RTP layout to fail")
+            _ = try await storage.importRPGMakerRTP(variant: .vx, from: unrelated)
+            XCTFail("Expected an unrelated directory to fail")
         } catch {
             XCTAssertEqual(error as? RTPStoreError, .invalidRPGMakerLayout)
         }

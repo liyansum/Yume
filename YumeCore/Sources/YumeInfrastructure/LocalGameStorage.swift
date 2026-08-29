@@ -832,9 +832,11 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             }
     }
 
-    /// Accepts either the actual RTP root or common wrappers such as
-    /// `VX Ace/app/Audio`. The source tree is inspected only; it is never
-    /// renamed, moved or otherwise modified.
+    /// Accepts either the actual RTP root or common installer wrappers such as
+    /// `VX/app` and `XP/{sys,app}`. A root is recognized when it directly
+    /// contains at least one standard asset directory (Audio, Graphics or
+    /// Fonts); RTP distributions are not required to ship all three. The
+    /// source tree is inspected only and is never renamed, moved or modified.
     private func resolveRPGMakerRTPRoot(at selectedRoot: URL) throws -> URL {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(
@@ -858,7 +860,8 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                     directoryNames.insert(child.lastPathComponent.lowercased())
                 }
             }
-            return directoryNames.contains("audio") && directoryNames.contains("graphics")
+            let assetDirectoryNames: Set<String> = ["audio", "graphics", "fonts"]
+            return !directoryNames.isDisjoint(with: assetDirectoryNames)
         }
 
         do {
@@ -866,11 +869,15 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
 
             let selectedComponents = selectedRoot.standardizedFileURL.pathComponents.count
             let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+            var enumerationError: Error?
             guard let enumerator = fileManager.enumerator(
                 at: selectedRoot,
                 includingPropertiesForKeys: keys,
                 options: [.skipsHiddenFiles],
-                errorHandler: { _, _ in false }
+                errorHandler: { _, error in
+                    enumerationError = error
+                    return false
+                }
             ) else {
                 throw RTPStoreError.sourceUnreadable
             }
@@ -892,6 +899,9 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                     candidates.append(candidate)
                     enumerator.skipDescendants()
                 }
+            }
+            if enumerationError != nil {
+                throw RTPStoreError.sourceUnreadable
             }
 
             guard let minimumDepth = candidates.map({
@@ -1119,11 +1129,15 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             .isSymbolicLinkKey,
             .fileSizeKey
         ]
+        var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: keys,
             options: [],
-            errorHandler: { _, _ in false }
+            errorHandler: { _, error in
+                enumerationError = error
+                return false
+            }
         ) else {
             throw StorageError.sourceIsNotDirectory
         }
@@ -1169,6 +1183,9 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                     byteCount: Int64(max(0, values.fileSize ?? 0))
                 )
             )
+        }
+        if let enumerationError {
+            throw enumerationError
         }
         return entries
     }

@@ -186,7 +186,7 @@
 "rtp.empty.message" = "依赖标准素材的游戏需要先在本地导入对应运行时包。";
 "rtp.import.action" = "导入包";
 "rtp.import.menu.title" = "选择 RPG Maker RTP";
-"rtp.import.menu.message" = "选择对应的 RPG Maker 版本，再选择素材根目录或包含它的外层目录。Yume 会自动找到 Audio 和 Graphics，且不会更改源目录。";
+"rtp.import.menu.message" = "选择对应的 RPG Maker 版本，再选择素材根目录或包含 app、sys 等安装器目录的外层目录。Yume 会复制并自动找到 Audio、Graphics 或 Fonts，且不会更改源目录。";
 "rtp.variant.xp" = "RPG Maker XP RTP";
 "rtp.variant.vx" = "RPG Maker VX RTP";
 "rtp.variant.vxAce" = "RPG Maker VX Ace RTP";
@@ -197,7 +197,7 @@
 "rtp.error.duplicate" = "该版本的 RPG Maker RTP 已经导入。若要替换，请先删除现有包。";
 "rtp.error.notDirectory" = "所选项目不是可访问的文件夹。";
 "rtp.error.empty" = "所选 RTP 文件夹内没有文件。";
-"rtp.error.layout" = "没有找到 RPG Maker RTP 素材根目录。请选择自身或下层同时包含 Audio 和 Graphics 的文件夹。";
+"rtp.error.layout" = "没有找到 RPG Maker RTP 素材根目录。请选择自身或下层包含 Audio、Graphics 或 Fonts 中至少一个目录的文件夹。";
 "rtp.error.ambiguous" = "找到了多个 RTP 素材根目录，请只选择一个 RPG Maker 版本所在的文件夹。";
 "rtp.error.unreadable" = "Yume 无法读取所选目录，请检查文件提供器权限后重试。";
 "rtp.error.copy" = "Yume 已找到 RTP，但无法把全部资源安全复制到本地存储。";

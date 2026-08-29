@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import YumeApplication
 import YumeDomain
@@ -56,20 +57,11 @@ struct RTPSettingsView: View {
         } message: {
             Text("rtp.import.menu.message")
         }
-        .fileImporter(
-            isPresented: $presentsImporter,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            defer { selectedVariant = nil }
-            guard case let .success(urls) = result, let url = urls.first,
-                  let variant = selectedVariant
-            else {
-                if case .failure = result { operationError = .sourceUnreadable }
-                return
-            }
-            Task {
-                operationError = await model.importRPGMakerRTP(variant: variant, from: url)
+        .sheet(isPresented: $presentsImporter, onDismiss: {
+            selectedVariant = nil
+        }) {
+            CopyingRTPFolderPicker(isPresented: $presentsImporter) { url in
+                importSelectedFolder(url)
             }
         }
         .alert("rtp.error.title", isPresented: operationErrorBinding) {
@@ -136,6 +128,17 @@ struct RTPSettingsView: View {
         .listStyle(.insetGrouped)
     }
 
+    private func importSelectedFolder(_ url: URL) {
+        guard let variant = selectedVariant else { return }
+        Task {
+            // The document picker produced this app-owned copy. The managed
+            // RTP store makes its own validated copy, so discard the picker
+            // copy afterwards without touching the user's original folder.
+            defer { try? FileManager.default.removeItem(at: url) }
+            operationError = await model.importRPGMakerRTP(variant: variant, from: url)
+        }
+    }
+
     private var removalBinding: Binding<Bool> {
         Binding(
             get: { removalCandidate != nil },
@@ -154,6 +157,58 @@ struct RTPSettingsView: View {
                 if !presented { operationError = nil }
             }
         )
+    }
+}
+
+/// Requests an app-owned copy instead of opening the provider's directory in
+/// place. This keeps directory imports readable when Yume is hosted by a
+/// container whose sandbox cannot retain the provider's security-scoped URL.
+private struct CopyingRTPFolderPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onPick: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [.folder],
+            asCopy: true
+        )
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIDocumentPickerViewController,
+        context: Context
+    ) {
+        context.coordinator.parent = self
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var parent: CopyingRTPFolderPicker
+
+        init(parent: CopyingRTPFolderPicker) {
+            self.parent = parent
+        }
+
+        func documentPicker(
+            _ controller: UIDocumentPickerViewController,
+            didPickDocumentsAt urls: [URL]
+        ) {
+            if let url = urls.first {
+                parent.onPick(url)
+            }
+            parent.isPresented = false
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            parent.isPresented = false
+        }
     }
 }
 
