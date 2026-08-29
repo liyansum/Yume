@@ -135,37 +135,22 @@ private struct StorageSettingsView: View {
                 }
             }
 
-            Section("storage.saves.title") {
+            Section {
                 if model.saveLibraries.isEmpty {
                     Text("storage.saves.empty")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.saveLibraries) { library in
-                        HStack(spacing: 12) {
-                            Image(systemName: library.boundGameID == nil ? "archivebox" : "link.circle.fill")
-                                .foregroundStyle(
-                                    library.boundGameID == nil ? Color.secondary : Color.accentColor
-                                )
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(library.title)
-                                Text(saveBindingDescription(library))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(library.byteCount, format: .byteCount(style: .file))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Button(role: .destructive) {
-                                pendingSaveDeletion = library
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel(Text("storage.saves.delete"))
+                        SaveLibraryStorageRow(
+                            library: library,
+                            bindingDescription: saveBindingDescription(library)
+                        ) {
+                            pendingSaveDeletion = library
                         }
                     }
                 }
+            } header: {
+                Text("storage.saves.title")
             } footer: {
                 Text("storage.saves.message")
             }
@@ -247,6 +232,36 @@ private struct StorageSettingsView: View {
         pendingSaveDeletion?.boundGameID == nil
             ? "storage.saves.delete.message"
             : "storage.saves.delete.bound.message"
+    }
+}
+
+private struct SaveLibraryStorageRow: View {
+    let library: GameSaveLibrary
+    let bindingDescription: String
+    let delete: () -> Void
+
+    private var isBound: Bool { library.boundGameID != nil }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isBound ? "link.circle.fill" : "archivebox")
+                .foregroundStyle(isBound ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(library.title)
+                Text(bindingDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(library.byteCount, format: .byteCount(style: .file))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button(role: .destructive, action: delete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(Text("storage.saves.delete"))
+        }
     }
 }
 

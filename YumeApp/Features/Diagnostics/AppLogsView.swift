@@ -55,13 +55,15 @@ struct AppLogsView: View {
                 }
             }
 
-            Section("appLogs.export.title") {
+            Section {
                 Button("appLogs.export.prepare") {
                     Task { await model.prepareAppLogExport() }
                 }
                 if let exportURL = model.appLogExportURL {
                     ShareLink("appLogs.export.share", item: exportURL)
                 }
+            } header: {
+                Text("appLogs.export.title")
             } footer: {
                 Text("appLogs.export.description")
             }
