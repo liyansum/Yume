@@ -6,27 +6,42 @@ struct DeveloperDiagnosticsView: View {
     let model: AppModel
 
     private var recentEntries: [DiagnosticEntry] {
-        Array(model.diagnosticEntries.suffix(200).reversed())
+        Array(model.diagnosticEntries.reversed().prefix(200))
     }
 
     var body: some View {
         List {
             Section("diagnostics.dev.entries.title") {
                 ForEach(recentEntries) { entry in
-                    HStack(alignment: .firstTextBaseline) {
-                        Image(systemName: symbolName(for: entry.level))
-                            .foregroundStyle(tint(for: entry.level))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.subsystem)
-                                .font(.subheadline.weight(.medium))
-                            Text(entry.code)
-                                .font(.caption.monospaced())
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Image(systemName: symbolName(for: entry.level))
+                                .foregroundStyle(tint(for: entry.level))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.subsystem)
+                                    .font(.subheadline.weight(.medium))
+                                Text(entry.code)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(entry.timestamp.formatted(date: .abbreviated, time: .standard))
+                                .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Text(entry.timestamp.formatted(date: .abbreviated, time: .standard))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        if let gameID = entry.gameID {
+                            Text(gameID.rawValue.uuidString)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                        if !entry.metadata.isEmpty {
+                            ForEach(entry.metadata.keys.sorted(), id: \.self) { key in
+                                Text("\(key)=\(entry.metadata[key] ?? "")")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(3)
+                            }
+                        }
                     }
                     .frame(minHeight: 44)
                 }

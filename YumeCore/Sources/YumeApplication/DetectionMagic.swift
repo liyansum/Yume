@@ -20,9 +20,7 @@ public enum DetectionMagic {
         Rule(pathSuffix: ".rgssad", allowedPrefixes: ["RGSSAD\0"]),
         Rule(pathSuffix: ".rgss2a", allowedPrefixes: ["RGSSAD\0"]),
         Rule(pathSuffix: ".rgss3a", allowedPrefixes: ["RGSSAD\0"]),
-        Rule(pathSuffix: ".rpa", allowedPrefixes: ["RPA-1.0 ", "RPA-2.0 ", "RPA-3.0 "]),
-        Rule(pathSuffix: ".nsa", allowedPrefixes: ["NSA"]),
-        Rule(pathSuffix: ".sar", allowedPrefixes: ["SAR"])
+        Rule(pathSuffix: ".rpa", allowedPrefixes: ["RPA-"])
     ]
 
     /// Returns blocking issues for every characteristic file whose head does

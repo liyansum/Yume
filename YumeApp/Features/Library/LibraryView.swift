@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 import YumeApplication
 import YumeDomain
@@ -23,6 +24,7 @@ struct LibraryView: View {
     @State private var pendingRename: ImportedGame?
     @State private var renameTitle = ""
     @State private var libraryOperationFailed = false
+    @State private var artworkURLs: [GameID: URL] = [:]
 
     private var layout: LayoutMode {
         get {
@@ -68,12 +70,11 @@ struct LibraryView: View {
         .navigationTitle("library.title")
         .searchable(text: $searchText, prompt: "library.search.prompt")
         .toolbar { toolbarContent }
-        .fileImporter(
-            isPresented: $presentsFileImporter,
-            allowedContentTypes: [.folder, .zip, UTType(filenameExtension: "7z") ?? .data],
-            allowsMultipleSelection: true,
-            onCompletion: handleFileSelection
-        )
+        .sheet(isPresented: $presentsFileImporter) {
+            CopyingGameSourcePicker(isPresented: $presentsFileImporter) { urls in
+                Task { await model.importSources(urls) }
+            }
+        }
         .overlay {
             if model.isImporting {
                 ImportProgressOverlay(progress: model.importProgress)
@@ -170,6 +171,13 @@ struct LibraryView: View {
         } message: {
             Text("library.operation.error.message")
         }
+        .task(id: model.games.map(\.id)) {
+            var urls: [GameID: URL] = [:]
+            for game in model.games {
+                urls[game.id] = await model.artworkURL(for: game)
+            }
+            artworkURLs = urls
+        }
     }
 
     private var emptyLibrary: some View {
@@ -188,8 +196,6 @@ struct LibraryView: View {
     private var grid: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                libraryHeader
-
                 LazyVGrid(
                     columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? 220 : 160), spacing: 14)],
                     spacing: 16
@@ -198,7 +204,7 @@ struct LibraryView: View {
                         NavigationLink {
                             GameDetailView(game: game, model: model)
                         } label: {
-                            GameGridItem(game: game)
+                            GameGridItem(game: game, artworkURL: artworkURLs[game.id])
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -218,7 +224,7 @@ struct LibraryView: View {
             NavigationLink {
                 GameDetailView(game: game, model: model)
             } label: {
-                GameListItem(game: game)
+                GameListItem(game: game, artworkURL: artworkURLs[game.id])
             }
             .swipeActions(edge: .leading, allowsFullSwipe: false) {
                 Button(role: .destructive) {
@@ -238,31 +244,6 @@ struct LibraryView: View {
             .contextMenu { gameActions(for: game) }
         }
         .listStyle(.insetGrouped)
-    }
-
-    private var libraryHeader: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "rectangle.stack.fill")
-                .font(.title2)
-                .foregroundStyle(.tint)
-                .frame(width: 44, height: 44)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
-            VStack(alignment: .leading, spacing: 2) {
-                Text("library.collection.title")
-                    .font(.headline)
-                Text(
-                    String.localizedStringWithFormat(
-                        String(localized: "library.collection.count"),
-                        Int64(visibleGames.count)
-                    )
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     @ViewBuilder
@@ -319,16 +300,6 @@ struct LibraryView: View {
             } label: {
                 Label("library.import.action", systemImage: "plus")
             }
-        }
-    }
-
-    private func handleFileSelection(_ result: Result<[URL], any Error>) {
-        switch result {
-        case let .success(urls):
-            guard !urls.isEmpty else { return }
-            Task { await model.importSources(urls) }
-        case .failure:
-            break
         }
     }
 
@@ -401,6 +372,56 @@ struct LibraryView: View {
             return "import.result.success.message"
         case .partialSuccess(_, let failure), .failure(let failure):
             return failure.localizedKey
+        }
+    }
+}
+
+private struct CopyingGameSourcePicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onPick: ([URL]) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        var types: [UTType] = [.folder, .zip]
+        if let sevenZip = UTType(filenameExtension: "7z") { types.append(sevenZip) }
+        if let rar = UTType(filenameExtension: "rar") { types.append(rar) }
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: types,
+            asCopy: true
+        )
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = true
+        return picker
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIDocumentPickerViewController,
+        context: Context
+    ) {
+        context.coordinator.parent = self
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var parent: CopyingGameSourcePicker
+
+        init(parent: CopyingGameSourcePicker) {
+            self.parent = parent
+        }
+
+        func documentPicker(
+            _ controller: UIDocumentPickerViewController,
+            didPickDocumentsAt urls: [URL]
+        ) {
+            if !urls.isEmpty { parent.onPick(urls) }
+            parent.isPresented = false
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            parent.isPresented = false
         }
     }
 }
@@ -487,6 +508,7 @@ private extension AppModel.ImportNotice.Failure {
         case .archiveNotAvailable: "import.failure.archiveNotAvailable"
         case .encryptedArchive: "import.failure.encryptedArchive"
         case .unsupportedArchive: "import.failure.unsupportedArchive"
+        case .encryptedRAR: "import.failure.encryptedRAR"
         case .unsafeArchive: "import.failure.unsafeArchive"
         case .insufficientStorage: "import.failure.insufficientStorage"
         case .noSupportedGame: "import.failure.noSupportedGame"

@@ -1,13 +1,16 @@
 import SwiftUI
+import UIKit
 import YumeDomain
 
 struct GameGridItem: View {
     let game: ImportedGame
+    var artworkURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            GameArtworkPlaceholder(gameID: game.id, engineName: game.engine.displayName)
+            GameArtworkView(game: game, artworkURL: artworkURL)
                 .aspectRatio(16 / 10, contentMode: .fit)
+                .frame(minHeight: 96)
 
             Text(game.title)
                 .font(.headline)
@@ -35,11 +38,13 @@ struct GameGridItem: View {
 
 struct GameListItem: View {
     let game: ImportedGame
+    var artworkURL: URL?
 
     var body: some View {
         HStack(spacing: 14) {
-            GameArtworkPlaceholder(gameID: game.id, engineName: game.engine.displayName)
-                .frame(width: 76, height: 58)
+            GameArtworkView(game: game, artworkURL: artworkURL)
+                .frame(width: 88, height: 55)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(game.title)
@@ -62,12 +67,12 @@ struct GameListItem: View {
     }
 }
 
-private struct GameArtworkPlaceholder: View {
-    let gameID: GameID
-    let engineName: String
+private struct GameArtworkView: View {
+    let game: ImportedGame
+    var artworkURL: URL?
 
     private var hue: Double {
-        let bytes = gameID.rawValue.uuid
+        let bytes = game.id.rawValue.uuid
         return Double(bytes.0) / 255
     }
 
@@ -82,21 +87,27 @@ private struct GameArtworkPlaceholder: View {
                 endPoint: .bottomTrailing
             )
 
-            Image(systemName: "gamecontroller")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
+            if let artworkURL, let image = UIImage(contentsOfFile: artworkURL.path) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "gamecontroller")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
 
             VStack {
                 Spacer()
                 HStack {
-                    Text(engineName)
+                    Text(game.engine.displayName)
                         .font(.caption2.weight(.semibold))
                         .lineLimit(1)
                     Spacer()
                 }
                 .foregroundStyle(.white.opacity(0.88))
                 .padding(8)
-                .background(.black.opacity(0.18))
+                .background(.black.opacity(0.28))
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -104,6 +115,7 @@ private struct GameArtworkPlaceholder: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(.white.opacity(0.1), lineWidth: 0.5)
         }
+        .clipped()
         .accessibilityHidden(true)
     }
 }

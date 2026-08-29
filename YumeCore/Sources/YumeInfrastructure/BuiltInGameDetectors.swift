@@ -108,7 +108,14 @@ public struct SignatureGameDetector: GameDetector, Sendable {
         }
 
         let score = min(100, collectedEvidence.reduce(0) { $0 + max(0, $1.score) })
-        let status: CompatibilityStatus = issues.isEmpty ? .runnable : .unsupported
+        let status: CompatibilityStatus
+        if issues.contains(where: { $0.severity == .blocking }) {
+            status = .unsupported
+        } else if !issues.isEmpty {
+            status = .partiallyCompatible
+        } else {
+            status = .runnable
+        }
         return ProbeResult(
             engine: descriptor,
             rootRelativePath: snapshot.rootRelativePath,
@@ -150,7 +157,10 @@ public extension SignatureGameDetector {
         ),
         requiredAny: [
             Rule(.file("game/script.rpy"), kind: .requiredFile, detailCode: "renpy.script", score: 65),
-            Rule(.fileExtension("rpa"), kind: .requiredFile, detailCode: "renpy.archive", score: 55)
+            Rule(.file("game/script.rpyc"), kind: .requiredFile, detailCode: "renpy.compiledScript", score: 60),
+            Rule(.fileExtension("rpa"), kind: .requiredFile, detailCode: "renpy.archive", score: 55),
+            Rule(.fileExtension("rpy"), kind: .requiredFile, detailCode: "renpy.scriptFile", score: 50),
+            Rule(.fileExtension("rpyc"), kind: .requiredFile, detailCode: "renpy.compiledFile", score: 45)
         ],
         supporting: [
             Rule(.file("renpy/common/00start.rpy"), kind: .characteristicFile, detailCode: "renpy.runtime", score: 30),
@@ -202,12 +212,16 @@ public extension SignatureGameDetector {
         ),
         requiredAny: [
             Rule(.file("0.txt"), kind: .requiredFile, detailCode: "ons.script.text", score: 75),
-            Rule(.file("nscript.dat"), kind: .requiredFile, detailCode: "ons.script.dat", score: 75)
+            Rule(.file("00.txt"), kind: .requiredFile, detailCode: "ons.script.text00", score: 75),
+            Rule(.file("nscript.dat"), kind: .requiredFile, detailCode: "ons.script.dat", score: 75),
+            Rule(.fileExtension("nt2"), kind: .requiredFile, detailCode: "ons.script.nt2", score: 40),
+            Rule(.fileExtension("nt3"), kind: .requiredFile, detailCode: "ons.script.nt3", score: 40)
         ],
         supporting: [
             Rule(.fileExtension("nsa"), kind: .characteristicFile, detailCode: "ons.archive.nsa", score: 20),
             Rule(.fileExtension("sar"), kind: .characteristicFile, detailCode: "ons.archive.sar", score: 20)
         ],
+        blockingExtensions: ["nt2", "nt3"],
         runtimeAvailable: true
     )
 
@@ -219,12 +233,16 @@ public extension SignatureGameDetector {
         ),
         requiredAny: [
             Rule(.file("data.xp3"), kind: .requiredFile, detailCode: "kirikiri.archive", score: 75),
-            Rule(.file("startup.tjs"), kind: .requiredFile, detailCode: "kirikiri.startup", score: 75)
+            Rule(.file("startup.tjs"), kind: .requiredFile, detailCode: "kirikiri.startup", score: 75),
+            Rule(.file("system/startup.tjs"), kind: .requiredFile, detailCode: "kirikiri.systemStartup", score: 70),
+            Rule(.file("Config.tjs"), kind: .requiredFile, detailCode: "kirikiri.config", score: 60),
+            Rule(.fileExtension("xp3"), kind: .requiredFile, detailCode: "kirikiri.xp3", score: 55)
         ],
         supporting: [
-            Rule(.fileExtension("ks"), kind: .characteristicFile, detailCode: "kirikiri.kagScript", score: 20)
+            Rule(.fileExtension("ks"), kind: .characteristicFile, detailCode: "kirikiri.kagScript", score: 20),
+            Rule(.fileExtension("tjs"), kind: .characteristicFile, detailCode: "kirikiri.tjs", score: 10)
         ],
-        blockingExtensions: ["tpm", "dll"],
+        blockingExtensions: ["tpm"],
         runtimeAvailable: true
     )
 
@@ -249,13 +267,15 @@ public extension SignatureGameDetector {
         ),
         requiredAny: [
             Rule(.file("tyrano/tyrano.ks"), kind: .requiredFile, detailCode: "tyrano.runtime", score: 70),
-            Rule(.file("data/scenario/first.ks"), kind: .requiredFile, detailCode: "tyrano.scenario", score: 60)
+            Rule(.file("tyrano/tyrano.js"), kind: .requiredFile, detailCode: "tyrano.runtime.js", score: 70),
+            Rule(.file("data/scenario/first.ks"), kind: .requiredFile, detailCode: "tyrano.scenario", score: 60),
+            Rule(.file("data/system/Config.tjs"), kind: .requiredFile, detailCode: "tyrano.config", score: 55)
         ],
         supporting: [
             Rule(.file("index.html"), kind: .characteristicFile, detailCode: "web.index", score: 20),
             Rule(.directory("data/scenario"), kind: .characteristicDirectory, detailCode: "tyrano.scenarioDirectory", score: 10)
         ],
-        blockingExtensions: ["node", "dll"],
+        blockingExtensions: ["node"],
         runtimeAvailable: true
     )
 
@@ -280,7 +300,7 @@ public extension SignatureGameDetector {
                 Rule(.file("www/data/system.json"), kind: .metadata, detailCode: "rpgmaker.system", score: 10),
                 Rule(.file("data/system.json"), kind: .metadata, detailCode: "rpgmaker.system", score: 10)
             ],
-            blockingExtensions: ["node", "dll"],
+            blockingExtensions: ["node"],
             runtimeAvailable: true
         )
     }

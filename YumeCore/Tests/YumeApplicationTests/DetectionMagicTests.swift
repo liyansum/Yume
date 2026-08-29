@@ -60,7 +60,7 @@ final class DetectionMagicTests: XCTestCase {
         case "original/data.xp3": "XP3\r\n \n\u{001A}"
         case "original/movie.swf": "CWS\u{0005}"
         case "original/Game.rgssad": "RGSSAD\0\u{01}"
-        case "original/archive.rpa": "RPA-3.0 1a2b"
+        case "original/archive.rpa": "RPA-3.2 1a2b"
         case "original/fake.xp3": "MZ not an archive"
         case "original/missing.swf": ""
         default: "ok"

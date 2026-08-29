@@ -40,11 +40,13 @@ struct SettingsView: View {
                     Label("settings.diagnostics", systemImage: "waveform.path.ecg")
                 }
 
+                #if DEBUG
                 NavigationLink {
                     DeveloperDiagnosticsView(model: model)
                 } label: {
                     Label("diagnostics.dev.title", systemImage: "ladybug")
                 }
+                #endif
 
                 NavigationLink {
                     LicensesView()
@@ -353,7 +355,9 @@ private struct DiagnosticsView: View {
     var body: some View {
         List {
             Section("diagnostics.library.title") {
-                LabeledContent("diagnostics.library.loaded", value: model.libraryLoadFailed ? "No" : "Yes")
+                LabeledContent("diagnostics.library.loaded") {
+                    Text(model.libraryLoadFailed ? "common.no" : "common.yes")
+                }
                 LabeledContent("diagnostics.library.games", value: model.games.count.formatted())
                 LabeledContent("diagnostics.recovery.issues", value: model.recoveryIssueCount.formatted())
                 LabeledContent("diagnostics.entries", value: model.diagnosticEntryCount.formatted())
@@ -405,6 +409,7 @@ private struct LicensesView: View {
                 noticeRow("Ruffle 0.5.0", license: "Apache-2.0 OR MIT", url: "https://github.com/ruffle-rs/ruffle")
                 noticeRow("PLzmaSDK / LZMA SDK", license: "MIT AND public-domain", url: "https://github.com/OlehKulykov/PLzmaSDK")
                 noticeRow("minizip-ng", license: "zlib", url: "https://github.com/zlib-ng/minizip-ng")
+                noticeRow("libarchive RAR/RAR5 reader", license: "BSD-2-Clause", url: "https://github.com/libarchive/libarchive")
             }
             Section("licenses.system.title") {
                 Text("licenses.system.message")

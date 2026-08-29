@@ -23,9 +23,7 @@ struct GameDetailView: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(game.title)
-                        .font(.largeTitle.bold())
+                VStack(alignment: .leading, spacing: 8) {
                     Text(game.engine.displayName)
                         .font(.headline)
                         .foregroundStyle(.secondary)
@@ -33,7 +31,7 @@ struct GameDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             }
 
             Section("game.compatibility.title") {

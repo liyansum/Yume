@@ -16,7 +16,8 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../ThirdParty/PLzmaSDK"),
-        .package(path: "../ThirdParty/MinizipNG")
+        .package(path: "../ThirdParty/MinizipNG"),
+        .package(path: "../ThirdParty/Libarchive")
     ],
     targets: [
         .target(name: "YumeDomain"),
@@ -24,7 +25,10 @@ let package = Package(
             name: "CYumeZlib",
             path: "Sources/CYumeZlib",
             publicHeadersPath: "include",
-            linkerSettings: [.linkedLibrary("z")]
+            linkerSettings: [
+                .linkedLibrary("z"),
+                .linkedLibrary("iconv", .when(platforms: [.iOS, .macOS]))
+            ]
         ),
         .target(
             name: "YumeApplication",
@@ -42,7 +46,8 @@ let package = Package(
                 "YumeApplication",
                 "CYumeZlib",
                 .product(name: "CMinizipNG", package: "MinizipNG"),
-                .product(name: "PLzmaSDK-Static", package: "PLzmaSDK")
+                .product(name: "PLzmaSDK-Static", package: "PLzmaSDK"),
+                .product(name: "CLibarchive", package: "Libarchive")
             ]
         ),
         .target(

@@ -32,7 +32,7 @@ struct GamePlayerView: View {
             }
             .foregroundStyle(.primary)
             .padding()
-            .accessibilityLabel("player.close")
+            .accessibilityLabel(Text("player.close"))
 
             if loadFailed {
                 ContentUnavailableView(
@@ -44,7 +44,7 @@ struct GamePlayerView: View {
                 .padding()
             }
 
-            if virtualControlsEnabled && !loadFailed {
+            if showsVirtualControls {
                 GameVirtualControls { keyCode in
                     inputCommand = WebInputCommand(keyCode: keyCode)
                     if hapticsEnabled {
@@ -81,6 +81,18 @@ struct GamePlayerView: View {
                 false,
                 ["gameID": session.content.game.id.rawValue.uuidString]
             )
+        }
+    }
+
+    private var showsVirtualControls: Bool {
+        guard virtualControlsEnabled, !loadFailed else { return false }
+        switch session.launchPlan.kind {
+        case .web:
+            return true
+        case let .hostedRuntime(identifier):
+            return identifier == "mkxp-z"
+        default:
+            return false
         }
     }
 
@@ -587,7 +599,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                         container.insertSubview(gameView, at: 0)
                         onLog("native.view-attached", false, baseMetadata)
                         firstFrameWatchdog = Task { @MainActor [weak self] in
-                            try? await Task.sleep(for: .seconds(15))
+                            try? await Task.sleep(for: .seconds(60))
                             guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
                             onLog("native.first-frame-timeout", true, baseMetadata)
                         }
@@ -735,18 +747,19 @@ private struct GameVirtualControls: View {
 
     var body: some View {
         VStack {
-            Spacer()
+            Spacer().allowsHitTesting(false)
             HStack(alignment: .bottom) {
                 directionalPad
-                Spacer()
+                Spacer().allowsHitTesting(false)
                 HStack(spacing: 14) {
                     controlButton("xmark", keyCode: 88, accessibilityKey: "controls.cancel")
                     controlButton("checkmark", keyCode: 90, accessibilityKey: "controls.confirm")
                 }
             }
             .padding(.horizontal, 24)
-            .padding(.bottom, 20)
+            .padding(.bottom, 28)
         }
+        .allowsHitTesting(true)
     }
 
     private var directionalPad: some View {
@@ -775,6 +788,8 @@ private struct GameVirtualControls: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Circle())
         .accessibilityLabel(accessibilityKey)
     }
 }

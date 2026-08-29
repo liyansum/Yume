@@ -7,6 +7,16 @@ import YumeInfrastructure
 @MainActor
 @Observable
 final class AppModel {
+    struct RuntimeLogFile: Identifiable, Hashable {
+        let url: URL
+        let gameTitle: String
+        let engineName: String
+        let modifiedAt: Date
+        let byteCount: Int64
+
+        var id: String { url.standardizedFileURL.path }
+    }
+
     struct DetectionChoice: Equatable {
         let candidates: [ProbeResult]
     }
@@ -28,6 +38,7 @@ final class AppModel {
             case archiveNotAvailable
             case encryptedArchive
             case unsupportedArchive
+            case encryptedRAR
             case unsafeArchive
             case insufficientStorage
             case noSupportedGame
@@ -78,6 +89,7 @@ final class AppModel {
     private(set) var recoveredTasks: [StagingManifest] = []
     private(set) var diagnosticEntries: [DiagnosticEntry] = []
     private(set) var appLogs: [AppLogFile] = []
+    private(set) var runtimeLogs: [RuntimeLogFile] = []
     private(set) var appLogAutoCleanupEnabled: Bool
     private(set) var appLogExportURL: URL?
     private(set) var isPlaybackSuspended = false
@@ -166,6 +178,7 @@ final class AppModel {
         }
         await refreshDiagnostics()
         await reloadLibrary()
+        await recoverPreviousNativeCrashBreadcrumbs()
         if appLogAutoCleanupEnabled {
             await cleanExpiredRuntimeLogs()
         }
@@ -215,6 +228,11 @@ final class AppModel {
                     guard let self else { return .cancel }
                     return await self.resolveDuplicate(existingGame)
                 }
+                await recordAppLog(
+                    subsystem: "import",
+                    message: "source.selected",
+                    metadata: ["filename": url.lastPathComponent]
+                )
                 if values.isDirectory == true {
                     _ = try await importer.importDirectory(
                         at: url,
@@ -222,7 +240,7 @@ final class AppModel {
                         resolveDetection: detectionResolver,
                         resolveDuplicate: duplicateResolver
                     )
-                } else if url.pathExtension.lowercased() == "zip" {
+                } else if Self.isZIPURL(url) {
                     var password: String?
                     var isRetry = false
                     while true {
@@ -249,7 +267,7 @@ final class AppModel {
                             isRetry = true
                         }
                     }
-                } else if url.pathExtension.lowercased() == "7z" {
+                } else if Self.isSevenZipURL(url) {
                     var password: String?
                     var isRetry = false
                     while true {
@@ -275,6 +293,17 @@ final class AppModel {
                             password = entered
                             isRetry = true
                         }
+                    }
+                } else if Self.isRARURL(url) {
+                    do {
+                        _ = try await importer.importRAR(
+                            at: url,
+                            progress: progressHandler,
+                            resolveDetection: detectionResolver,
+                            resolveDuplicate: duplicateResolver
+                        )
+                    } catch SafeRARError.encryptedArchiveUnsupported {
+                        throw ImportNotice.Failure.encryptedRAR
                     }
                 } else {
                     throw ImportNotice.Failure.archiveNotAvailable
@@ -337,6 +366,27 @@ final class AppModel {
                      .extractionFailed:
                     failure = .unreadable
                 }
+                break
+            } catch let error as SafeRARError {
+                switch error {
+                case .encryptedArchiveUnsupported:
+                    failure = .encryptedRAR
+                case .unsafePath, .symbolicLinkEntry, .duplicatePath,
+                     .entryLimitExceeded, .pathLimitExceeded,
+                     .expandedSizeLimitExceeded, .compressionRatioLimitExceeded:
+                    failure = .unsafeArchive
+                default:
+                    failure = .unreadable
+                }
+                await recordAppLog(
+                    level: .error,
+                    subsystem: "import",
+                    message: "source.failed",
+                    metadata: [
+                        "filename": url.lastPathComponent,
+                        "error": String(describing: error)
+                    ]
+                )
                 break
             } catch {
                 failure = .unreadable
@@ -447,9 +497,9 @@ final class AppModel {
                     "engine": game.engine.id.rawValue,
                     "runtime": runtimeIdentifier(for: session.launchPlan.kind),
                     "runtimeVersion": session.launchPlan.runtimeVersionLabel,
-                    "contentRoot": session.content.rootURL.path,
-                    "saveRoot": session.content.saveRootURL.path,
-                    "logRoot": session.content.logRootURL.path,
+                    "contentRoot": Self.containerRelativePath(session.content.rootURL),
+                    "saveRoot": Self.containerRelativePath(session.content.saveRootURL),
+                    "logRoot": Self.containerRelativePath(session.content.logRootURL),
                     "rtpMountCount": String(session.rtpMountRoots.count),
                     "rtpMounts": session.rtpMountRoots.map(\.path).joined(separator: " | ")
                 ]
@@ -632,16 +682,44 @@ final class AppModel {
     }
 
     func importRPGMakerRTP(
-        variant: RPGMakerRTPVariant,
-        from url: URL
+        from url: URL,
+        variantHint: RPGMakerRTPVariant? = nil
     ) async -> RTPStoreError? {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+        await recordAppLog(
+            subsystem: "rtp",
+            message: "archive.import-requested",
+            metadata: ["filename": url.lastPathComponent]
+        )
         do {
-            _ = try await rtpStore.importRPGMakerRTP(variant: variant, from: url)
+            let packages = try await rtpStore.importRPGMakerRTP(
+                from: url,
+                variantHint: variantHint
+            )
             await refreshRTPPackages()
+            await recordAppLog(
+                subsystem: "rtp",
+                message: "archive.imported",
+                metadata: [
+                    "filename": url.lastPathComponent,
+                    "variants": packages.compactMap { $0.variant?.rawValue }.joined(separator: ","),
+                    "packageCount": String(packages.count),
+                    "fileCount": String(packages.reduce(0) { $0 + $1.fileCount }),
+                    "byteCount": String(packages.reduce(Int64(0)) { $0 + $1.byteCount })
+                ]
+            )
             return nil
         } catch let error as RTPStoreError {
+            await recordAppLog(
+                level: .error,
+                subsystem: "rtp",
+                message: "archive.import-failed",
+                metadata: [
+                    "filename": url.lastPathComponent,
+                    "error": String(describing: error)
+                ]
+            )
             return error
         } catch {
             return .copyFailed
@@ -715,6 +793,42 @@ final class AppModel {
 
     func refreshAppLogs() async {
         appLogs = (try? await appLogStore.logs()) ?? []
+        var discovered: [RuntimeLogFile] = []
+        for game in games {
+            guard let content = try? await contentProvider.contentLocation(for: game.id),
+                  let files = try? FileManager.default.contentsOfDirectory(
+                    at: content.logRootURL,
+                    includingPropertiesForKeys: [
+                        .isRegularFileKey,
+                        .fileSizeKey,
+                        .contentModificationDateKey
+                    ],
+                    options: [.skipsHiddenFiles]
+                  )
+            else { continue }
+            for file in files {
+                let ext = file.pathExtension.lowercased()
+                guard ["log", "txt", "json", "jsonl"].contains(ext),
+                      let values = try? file.resourceValues(forKeys: [
+                        .isRegularFileKey,
+                        .fileSizeKey,
+                        .contentModificationDateKey
+                      ]),
+                      values.isRegularFile == true
+                else { continue }
+                discovered.append(RuntimeLogFile(
+                    url: file,
+                    gameTitle: game.title,
+                    engineName: game.engine.displayName,
+                    modifiedAt: values.contentModificationDate ?? .distantPast,
+                    byteCount: Int64(max(0, values.fileSize ?? 0))
+                ))
+            }
+        }
+        runtimeLogs = discovered.sorted { lhs, rhs in
+            if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt > rhs.modifiedAt }
+            return lhs.url.lastPathComponent < rhs.url.lastPathComponent
+        }
     }
 
     func setAppLogAutoCleanupEnabled(_ enabled: Bool) async {
@@ -840,6 +954,43 @@ final class AppModel {
         }
     }
 
+    private func recoverPreviousNativeCrashBreadcrumbs() async {
+        let stamp = Self.runtimeLogTimestamp.string(from: Date())
+        for game in games {
+            guard let content = try? await contentProvider.contentLocation(for: game.id),
+                  let files = try? FileManager.default.contentsOfDirectory(
+                    at: content.logRootURL,
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                  )
+            else { continue }
+            for file in files where file.lastPathComponent.hasSuffix("-crash.log") {
+                guard let values = try? file.resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                ), values.isRegularFile == true, (values.fileSize ?? 0) > 0
+                else { continue }
+                let detail = (try? String(contentsOf: file, encoding: .utf8)) ?? "unreadable"
+                await recordAppLog(
+                    level: .error,
+                    subsystem: "runtime-crash",
+                    message: "previous-native-crash-detected",
+                    metadata: [
+                        "gameID": game.id.rawValue.uuidString,
+                        "game": game.title,
+                        "engine": game.engine.id.rawValue,
+                        "file": file.lastPathComponent,
+                        "detail": String(detail.suffix(4_000))
+                    ]
+                )
+                let archived = content.logRootURL.appendingPathComponent(
+                    "session-recovered-\(stamp)-\(UUID().uuidString.prefix(8))-\(file.lastPathComponent)"
+                )
+                try? FileManager.default.moveItem(at: file, to: archived)
+            }
+        }
+        await refreshAppLogs()
+    }
+
     private func cleanExpiredRuntimeLogs(in root: URL) {
         let cutoff = Date(timeIntervalSinceNow: -7 * 24 * 60 * 60)
         guard let files = try? FileManager.default.contentsOfDirectory(
@@ -890,6 +1041,61 @@ final class AppModel {
         case let .hostedRuntime(identifier): identifier
         case let .notPlanned(reason): "not-planned:\(reason)"
         }
+    }
+
+    func artworkURL(for game: ImportedGame) async -> URL? {
+        guard let location = try? await contentProvider.contentLocation(for: game.id) else {
+            return nil
+        }
+        return Self.firstArtwork(in: location.rootURL)
+    }
+
+    static func firstArtwork(in root: URL) -> URL? {
+        let names = [
+            "Game.png", "Game.jpg", "Title.png", "title.png", "cover.png",
+            "poster.png", "icon.png", "icon/icon.png", "www/icon/icon.png",
+            "Graphics/Title.png", "Graphics/Titles/title.png",
+            "img/system/Window.png", "gui/window_icon.png"
+        ]
+        for name in names {
+            let url = root.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    static func containerRelativePath(_ url: URL) -> String {
+        let path = url.path
+        if let range = path.range(of: "/Application Support/") {
+            return String(path[range.lowerBound...])
+        }
+        if let range = path.range(of: "/Yume/") {
+            return String(path[range.lowerBound...])
+        }
+        return url.lastPathComponent
+    }
+
+    static func isZIPURL(_ url: URL) -> Bool {
+        if url.pathExtension.lowercased() == "zip" { return true }
+        return filePrefix(url, count: 4) == Data([0x50, 0x4B, 0x03, 0x04])
+            || filePrefix(url, count: 4) == Data([0x50, 0x4B, 0x05, 0x06])
+    }
+
+    static func isSevenZipURL(_ url: URL) -> Bool {
+        if url.pathExtension.lowercased() == "7z" { return true }
+        return filePrefix(url, count: 6) == Data([0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C])
+    }
+
+    static func isRARURL(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if ext == "rar" { return true }
+        return SafeRARExtractor.matchesRARMagic(at: url)
+    }
+
+    private static func filePrefix(_ url: URL, count: Int) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        return try? handle.read(upToCount: count)
     }
 }
 

@@ -42,6 +42,41 @@ final class GameDetectionTests: XCTestCase {
         XCTAssertEqual(results.map(\.engine.id.rawValue), ["alpha", "zeta"])
     }
 
+    func testCollapseNestedCandidatesKeepsASingleEngineRoot() throws {
+        let outer = ProbeResult(
+            engine: EngineDescriptor(
+                id: EngineID(rawValue: "rpg-maker-mv"),
+                displayName: "MV",
+                compatibilityVersion: "MV"
+            ),
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            confidence: 90,
+            evidence: [],
+            compatibility: CompatibilityReport(status: .runnable)
+        )
+        let inner = ProbeResult(
+            engine: outer.engine,
+            rootRelativePath: try StorageRelativePath(rawValue: "original/www"),
+            confidence: 90,
+            evidence: [],
+            compatibility: CompatibilityReport(status: .runnable)
+        )
+        let flash = ProbeResult(
+            engine: EngineDescriptor(
+                id: EngineID(rawValue: "flash"),
+                displayName: "Flash",
+                compatibilityVersion: "AVM"
+            ),
+            rootRelativePath: try StorageRelativePath(rawValue: "original/game/movie.swf"),
+            confidence: 90,
+            evidence: [],
+            compatibility: CompatibilityReport(status: .runnable)
+        )
+        let collapsed = DetectionCandidateCollapse.collapse([inner, outer, flash])
+        XCTAssertEqual(collapsed.map(\.engine.id.rawValue), ["rpg-maker-mv"])
+        XCTAssertEqual(collapsed.first?.rootRelativePath.rawValue, "original")
+    }
+
     func testSnapshotMatchingIsCaseInsensitiveAndNormalizesSeparators() throws {
         let snapshot = DetectionSnapshot(
             rootRelativePath: try StorageRelativePath(rawValue: "original"),

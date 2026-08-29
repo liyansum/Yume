@@ -354,8 +354,11 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
 static int32_t MKXPStart(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || session->view == nil || session->running.exchange(true)) return -1;
+    AppendMKXPHostLog(session, "start.enter");
+    MKXPEmit(session, YUME_RUNTIME_EVENT_WARNING, "mkxp.stage.reset.begin");
     mkxp_resetSessionState();
     AppendMKXPHostLog(session, "start.reset-complete");
+    MKXPEmit(session, YUME_RUNTIME_EVENT_WARNING, "mkxp.stage.configure.begin");
     ConfigureMKXP(session);
     AppendMKXPHostLog(session, "start.configured");
     mkxp_setFrameRenderedCallback(MKXPFirstFrame, session);
@@ -364,14 +367,25 @@ static int32_t MKXPStart(void *opaque) {
     mkxp_setEngineTerminatedCallback(MKXPTerminated, session);
     mkxp_setErrorMessageCallback(MKXPError, session);
     mkxp_setInfoMessageCallback(MKXPInfo, session);
-    mkxp_setGamePath(session->contentRoot.c_str());
-    AppendMKXPHostLog(session, "start.game-path-set");
     session->everStarted.store(true);
     [session->view beginEmbedding];
     MKXPEmit(session, YUME_RUNTIME_EVENT_STARTED, "mkxp.started");
 
     dispatch_async(dispatch_get_main_queue(), ^{
+        AppendMKXPHostLog(session, "engine.main-enter");
+        // mkxp-z's iOS host is designed to enter SDL_main before a game path
+        // is supplied. Its wait loop pumps CFRunLoop, which gives SwiftUI,
+        // lifecycle logging and the embedding view a chance to attach before
+        // SDL takes over the main thread. Setting the path before SDL_main
+        // let the queued SDL block starve those tasks and produced a permanent
+        // black host view with no App-level runtime events.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppendMKXPHostLog(session, "engine.game-path-set.begin");
+            mkxp_setGamePath(session->contentRoot.c_str());
+            AppendMKXPHostLog(session, "engine.game-path-set.end");
+        });
         SDL_SetMainReady();
+        AppendMKXPHostLog(session, "engine.sdl-main.begin");
         char executable[] = "yume-mkxp-z";
         char *arguments[] = {executable, nullptr};
         (void)SDL_main(1, arguments);

@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import YumeDomain
 @testable import YumeInfrastructure
 
 final class SafeZIPExtractorTests: XCTestCase {
@@ -163,6 +164,93 @@ final class SafeZIPExtractorTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destinationURL.path))
     }
 
+    func testShiftJISFilenamesAndBackslashPathsExtract() throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        let shiftJISName = Data([0x83, 0x51, 0x81, 0x5B, 0x83, 0x80, 0x2E, 0x74, 0x78, 0x74]) // ゲーム.txt
+        try ZIPBuilder.make([
+            .storedRaw(
+                name: "folder\\file.txt",
+                data: Data("hello".utf8),
+                crc32: 0x3610a686
+            ),
+            .storedRaw(
+                nameBytes: shiftJISName,
+                data: Data("hello".utf8),
+                crc32: 0x3610a686
+            )
+        ]).write(to: fixture.archiveURL)
+
+        _ = try SafeZIPExtractor().extract(fixture.archiveURL, to: fixture.destinationURL)
+
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.destinationURL.appendingPathComponent("folder/file.txt").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: fixture.destinationURL.appendingPathComponent("ゲーム.txt").path
+        ))
+    }
+
+    func testUnencryptedRAR5StoredArchiveExtracts() throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        let rar = Data(base64Encoded: "UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAA4MAZjLAIDC50ABJ0ApIMCtEOglYAAAQ5oZWxsb3dvcmxkLnR4dAoDE34Oq1tW6Q4aaGVsbG8gbGliYXJjaGl2ZSB0ZXN0IHN1aXRlIQodd1ZRAwUEAA==")!
+        let archiveURL = fixture.root.appendingPathComponent("fixture.rar")
+        try rar.write(to: archiveURL)
+        let destination = fixture.root.appendingPathComponent("rar-out", isDirectory: true)
+
+        let inspection = try SafeRARExtractor().extract(archiveURL, to: destination)
+
+        XCTAssertEqual(inspection.fileCount, 1)
+        let extracted = destination.appendingPathComponent("helloworld.txt")
+        XCTAssertEqual(
+            try String(contentsOf: extracted, encoding: .utf8),
+            "hello libarchive test suite!\n"
+        )
+    }
+
+    func testCombinedRPGMakerRTPZIPImportsXPVXAndVXAceAtomically() async throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        try ZIPBuilder.make([
+            .directory("XP/"),
+            .directory("XP/app/"),
+            .directory("XP/app/Audio/BGM/"),
+            .stored("XP/app/Audio/BGM/theme.ogg", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("XP/sys/"),
+            .stored("XP/sys/setup.dat", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("VX/"),
+            .directory("VX/app/"),
+            .directory("VX/app/Graphics/System/"),
+            .stored("VX/app/Graphics/System/Window.png", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("VXAce/"),
+            .directory("VXAce/app/"),
+            .directory("VXAce/app/Fonts/"),
+            .stored("VXAce/app/Fonts/game.ttf", data: Data("hello".utf8), crc32: 0x3610a686)
+        ]).write(to: fixture.archiveURL)
+        let storage = LocalGameStorage(
+            baseURL: fixture.root.appendingPathComponent("Storage", isDirectory: true)
+        )
+
+        let packages = try await storage.importRPGMakerRTP(from: fixture.archiveURL)
+
+        XCTAssertEqual(Set(packages.compactMap(\.variant)), Set(RPGMakerRTPVariant.allCases))
+        XCTAssertEqual(packages.map(\.fileCount), [1, 1, 1])
+        let imported = storage.layout.rtp.appendingPathComponent("rgss", isDirectory: true)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: imported.appendingPathComponent("rgss-xp/Audio/BGM/theme.ogg").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: imported.appendingPathComponent("rgss-vx/Graphics/System/Window.png").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: imported.appendingPathComponent("rgss-vx-ace/Fonts/game.ttf").path
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: imported.appendingPathComponent("rgss-xp/sys/setup.dat").path
+        ))
+    }
+
     private static let pkCryptFixture =
         "UEsDBAoACQAAACK3G12FjbAOLQAAACEAAAAKABwAaW5kZXguaHRtbFVUCQADP1CQakNQkGp1eAsAAQQAAAAABAAAAAD3OAIkD3Skz4H58akrxb/GuMM9Ow0LkLO1yZOu8FJw6B+LZNuOPFQT6ILQpbBQSwcIhY2wDi0AAAAhAAAAUEsBAh4DCgAJAAAAIrcbXYWNsA4tAAAAIQAAAAoAGAAAAAAAAQAAAICBAAAAAGluZGV4Lmh0bWxVVAUAAz9QkGp1eAsAAQQAAAAABAAAAABQSwUGAAAAAAEAAQBQAAAAgQAAAAAA"
 
@@ -193,6 +281,7 @@ private struct ZIPFixture {
 private enum ZIPBuilder {
     struct Entry {
         let name: String
+        let nameBytes: Data?
         let method: UInt16
         let flags: UInt16
         let crc32: UInt32
@@ -203,6 +292,7 @@ private enum ZIPBuilder {
         static func directory(_ name: String) -> Entry {
             Entry(
                 name: name,
+                nameBytes: nil,
                 method: 0,
                 flags: 0,
                 crc32: 0,
@@ -219,8 +309,20 @@ private enum ZIPBuilder {
             flags: UInt16 = 0,
             externalAttributes: UInt32 = 0x81a40000
         ) -> Entry {
+            storedRaw(name: name, data: data, crc32: crc32, flags: flags, externalAttributes: externalAttributes)
+        }
+
+        static func storedRaw(
+            name: String? = nil,
+            nameBytes: Data? = nil,
+            data: Data,
+            crc32: UInt32,
+            flags: UInt16 = 0,
+            externalAttributes: UInt32 = 0x81a40000
+        ) -> Entry {
             Entry(
-                name: name,
+                name: name ?? "",
+                nameBytes: nameBytes,
                 method: 0,
                 flags: flags,
                 crc32: crc32,
@@ -238,6 +340,7 @@ private enum ZIPBuilder {
         ) -> Entry {
             Entry(
                 name: name,
+                nameBytes: nil,
                 method: 8,
                 flags: 0,
                 crc32: crc32,
@@ -252,7 +355,7 @@ private enum ZIPBuilder {
         var archive = Data()
         var central = Data()
         for entry in entries {
-            let name = Data(entry.name.utf8)
+            let name = entry.nameBytes ?? Data(entry.name.utf8)
             let localOffset = UInt32(archive.count)
             archive.appendLE(UInt32(0x04034b50))
             archive.appendLE(UInt16(20))

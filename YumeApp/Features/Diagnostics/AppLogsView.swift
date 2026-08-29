@@ -56,6 +56,39 @@ struct AppLogsView: View {
             }
 
             Section {
+                if model.runtimeLogs.isEmpty {
+                    Text("appLogs.runtime.empty")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.runtimeLogs) { log in
+                        ShareLink(item: log.url) {
+                            HStack(spacing: 12) {
+                                Image(systemName: "gearshape.2")
+                                    .foregroundStyle(.secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(log.url.lastPathComponent)
+                                    Text("\(log.gameTitle) · \(log.engineName)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(log.byteCount, format: .byteCount(style: .file))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "square.and.arrow.up")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(minHeight: 44)
+                        }
+                    }
+                }
+            } header: {
+                Text("appLogs.runtime.title")
+            } footer: {
+                Text("appLogs.runtime.description")
+            }
+
+            Section {
                 Button("appLogs.export.prepare") {
                     Task { await model.prepareAppLogExport() }
                 }

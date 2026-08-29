@@ -58,6 +58,9 @@ public enum RTPStoreError: Error, Equatable, Sendable {
     case invalidRPGMakerLayout
     case ambiguousRPGMakerLayout
     case sourceUnreadable
+    case sourceIsNotZIPArchive
+    case invalidZIPArchive
+    case unidentifiedRPGMakerVariant
     case copyFailed
     case packageNotFound
     case corruptIndex

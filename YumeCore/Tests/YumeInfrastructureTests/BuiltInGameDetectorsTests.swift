@@ -83,6 +83,55 @@ final class BuiltInGameDetectorsTests: XCTestCase {
         }
     }
 
+    func testDetectsONS00TextAndCompiledRenPy() throws {
+        let ons = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["00.txt", "arc.nsa"],
+            directories: []
+        )
+        guard case let .selected(onsResult) = BuiltInGameDetectors.registry.decide(ons) else {
+            return XCTFail("Expected ONS detection from 00.txt")
+        }
+        XCTAssertEqual(onsResult.engine.id.rawValue, "onscripter")
+        XCTAssertEqual(onsResult.compatibility.status, .runnable)
+
+        let renpy = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["game/script.rpyc"],
+            directories: ["game"]
+        )
+        guard case let .selected(renpyResult) = BuiltInGameDetectors.registry.decide(renpy) else {
+            return XCTFail("Expected Ren'Py detection from compiled script")
+        }
+        XCTAssertEqual(renpyResult.engine.id.rawValue, "renpy")
+    }
+
+    func testKirikiriWindowsDLLDoesNotBlockImport() throws {
+        let snapshot = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["data.xp3", "krmovie.dll"],
+            directories: []
+        )
+        guard case let .selected(result) = BuiltInGameDetectors.registry.decide(snapshot) else {
+            return XCTFail("Expected Kirikiri detection")
+        }
+        XCTAssertEqual(result.engine.id.rawValue, "kirikiri")
+        XCTAssertEqual(result.compatibility.status, .runnable)
+    }
+
+    func testNT2IsReportedAsUnsupportedONS() throws {
+        let snapshot = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["nscript.nt2"],
+            directories: []
+        )
+        guard case let .selected(result) = BuiltInGameDetectors.registry.decide(snapshot) else {
+            return XCTFail("Expected ONS detection for nt2")
+        }
+        XCTAssertEqual(result.engine.id.rawValue, "onscripter")
+        XCTAssertEqual(result.compatibility.status, .unsupported)
+    }
+
     func testEveryDeclaredEngineFamilyIsRunnableInTheBundledBuild() {
         let catalog = GameEngineCatalog(detectors: BuiltInGameDetectors.registry.detectors)
         let expected = Set([

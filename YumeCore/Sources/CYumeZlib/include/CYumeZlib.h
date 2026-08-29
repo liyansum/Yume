@@ -50,4 +50,12 @@ int32_t yume_zlib_inflate_mem(
     uint64_t *written_byte_count
 );
 
+int32_t yume_decode_archive_filename(
+    const unsigned char *bytes,
+    uint32_t byte_count,
+    char *utf8_out,
+    uint32_t utf8_capacity,
+    uint32_t *utf8_length
+);
+
 #endif

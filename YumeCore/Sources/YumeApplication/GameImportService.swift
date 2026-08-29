@@ -29,6 +29,7 @@ public protocol GameImportStorage: ImportStagingStorage {
     func validateDirectorySource(at sourceURL: URL) async throws -> StorageBudget
     func validateZIPSource(at sourceURL: URL, password: String?) async throws -> StorageBudget
     func validate7zSource(at sourceURL: URL, password: String?) async throws -> StorageBudget
+    func validateRARSource(at sourceURL: URL) async throws -> StorageBudget
     func stageDirectory(
         at sourceURL: URL,
         for taskID: ImportTaskID
@@ -41,6 +42,10 @@ public protocol GameImportStorage: ImportStagingStorage {
     func stage7z(
         at sourceURL: URL,
         password: String?,
+        for taskID: ImportTaskID
+    ) async throws -> StagedSourceSummary
+    func stageRAR(
+        at sourceURL: URL,
         for taskID: ImportTaskID
     ) async throws -> StagedSourceSummary
     func detectionSnapshots(for taskID: ImportTaskID) async throws -> [DetectionSnapshot]
@@ -149,10 +154,35 @@ public actor DirectoryGameImportService {
         )
     }
 
+    public func importRAR(
+        at sourceURL: URL,
+        progress: ProgressHandler? = nil,
+        resolveDetection: DetectionResolver? = nil,
+        resolveDuplicate: DuplicateResolver? = nil
+    ) async throws -> ImportedGame {
+        try await importSource(
+            .rar,
+            at: sourceURL,
+            progress: progress,
+            resolveDetection: resolveDetection,
+            resolveDuplicate: resolveDuplicate
+        )
+    }
+
     private enum SourceKind {
         case directory
         case zip(password: String?)
         case sevenZip(password: String?)
+        case rar
+
+        var logName: String {
+            switch self {
+            case .directory: "directory"
+            case .zip: "zip"
+            case .sevenZip: "7z"
+            case .rar: "rar"
+            }
+        }
     }
 
     private func importSource(
@@ -164,7 +194,15 @@ public actor DirectoryGameImportService {
     ) async throws -> ImportedGame {
         let taskID = ImportTaskID()
         _ = try await coordinator.startTask(id: taskID)
-        await record(.information, code: "import.started", taskID: taskID)
+        await record(
+            .information,
+            code: "import.started",
+            taskID: taskID,
+            metadata: [
+                "source": sourceURL.lastPathComponent,
+                "kind": sourceKind.logName
+            ]
+        )
 
         do {
             await progress?(.validating)
@@ -177,6 +215,8 @@ public actor DirectoryGameImportService {
                 budget = try await storage.validateZIPSource(at: sourceURL, password: password)
             case let .sevenZip(password):
                 budget = try await storage.validate7zSource(at: sourceURL, password: password)
+            case .rar:
+                budget = try await storage.validateRARSource(at: sourceURL)
             }
 
             try await advance(taskID, to: .budgeting)
@@ -203,6 +243,8 @@ public actor DirectoryGameImportService {
                     password: password,
                     for: taskID
                 )
+            case .rar:
+                summary = try await storage.stageRAR(at: sourceURL, for: taskID)
             }
             var replacementGame: ImportedGame?
             if let duplicate = try await storage.game(
@@ -222,13 +264,15 @@ public actor DirectoryGameImportService {
             try await advance(taskID, to: .detectingRoots)
             await progress?(.detecting)
             let snapshots = try await storage.detectionSnapshots(for: taskID)
-            let candidates = snapshots.flatMap { snapshot -> [ProbeResult] in
-                switch detectors.decide(snapshot) {
-                case .noMatch: []
-                case let .selected(result): [result]
-                case let .ambiguous(results): results
+            let candidates = DetectionCandidateCollapse.collapse(
+                snapshots.flatMap { snapshot -> [ProbeResult] in
+                    switch detectors.decide(snapshot) {
+                    case .noMatch: []
+                    case let .selected(result): [result]
+                    case let .ambiguous(results): results
+                    }
                 }
-            }.sorted(by: Self.preferredProbe)
+            )
 
             guard !candidates.isEmpty else {
                 throw GameImportError.noSupportedGameFound
@@ -295,7 +339,12 @@ public actor DirectoryGameImportService {
                 code: "import.completed",
                 taskID: taskID,
                 gameID: game.id,
-                metadata: ["engine": game.engine.id.rawValue]
+                metadata: [
+                    "engine": game.engine.id.rawValue,
+                    "source": sourceURL.lastPathComponent,
+                    "root": selected.rootRelativePath.rawValue,
+                    "confidence": String(selected.confidence)
+                ]
             )
             return game
         } catch {
@@ -312,7 +361,11 @@ public actor DirectoryGameImportService {
             await record(
                 .error,
                 code: Self.errorCode(error),
-                taskID: taskID
+                taskID: taskID,
+                metadata: [
+                    "source": sourceURL.lastPathComponent,
+                    "error": String(describing: error)
+                ]
             )
             throw error
         }
@@ -323,8 +376,7 @@ public actor DirectoryGameImportService {
     }
 
     private static func preferredProbe(_ lhs: ProbeResult, _ rhs: ProbeResult) -> Bool {
-        if lhs.confidence != rhs.confidence { return lhs.confidence > rhs.confidence }
-        return lhs.rootRelativePath.rawValue < rhs.rootRelativePath.rawValue
+        DetectionCandidateCollapse.preferred(lhs, rhs)
     }
 
     private static func displayTitle(for sourceURL: URL) -> String {
@@ -362,5 +414,44 @@ public actor DirectoryGameImportService {
                 metadata: metadata
             )
         )
+    }
+}
+
+public enum DetectionCandidateCollapse: Sendable {
+    public static func collapse(_ probes: [ProbeResult]) -> [ProbeResult] {
+        let sorted = probes.sorted(by: preferred)
+        var kept: [ProbeResult] = []
+        for probe in sorted {
+            if probe.engine.id.rawValue == "flash" {
+                let overshadowed = kept.contains { other in
+                    other.engine.id.rawValue != "flash"
+                        && other.confidence >= 70
+                        && isSameOrNested(other.rootRelativePath, probe.rootRelativePath)
+                }
+                if overshadowed { continue }
+            }
+            let nestedDuplicate = kept.contains { existing in
+                existing.engine.id == probe.engine.id
+                    && isSameOrNested(existing.rootRelativePath, probe.rootRelativePath)
+            }
+            if nestedDuplicate { continue }
+            kept.append(probe)
+        }
+        return kept
+    }
+
+    static func preferred(_ lhs: ProbeResult, _ rhs: ProbeResult) -> Bool {
+        if lhs.confidence != rhs.confidence { return lhs.confidence > rhs.confidence }
+        if lhs.rootRelativePath.rawValue.count != rhs.rootRelativePath.rawValue.count {
+            return lhs.rootRelativePath.rawValue.count < rhs.rootRelativePath.rawValue.count
+        }
+        return lhs.rootRelativePath.rawValue < rhs.rootRelativePath.rawValue
+    }
+
+    private static func isSameOrNested(_ lhs: StorageRelativePath, _ rhs: StorageRelativePath) -> Bool {
+        let left = lhs.rawValue
+        let right = rhs.rawValue
+        if left == right { return true }
+        return right.hasPrefix(left + "/") || left.hasPrefix(right + "/")
     }
 }

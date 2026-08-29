@@ -268,11 +268,11 @@ public struct SafeZIPExtractor: Sendable {
             }
 
             let name = try decodedName(nameData, flags: flags)
+                .replacingOccurrences(of: "\\", with: "/")
             let directoryEntry = name.hasSuffix("/")
             let trimmedName = directoryEntry ? String(name.dropLast()) : name
             guard !trimmedName.isEmpty,
-                  trimmedName.utf8.count <= limits.maximumPathByteCount,
-                  !trimmedName.contains("\\")
+                  trimmedName.utf8.count <= limits.maximumPathByteCount
             else { throw SafeZIPError.pathLimitExceeded }
             let relativePath: StorageRelativePath
             do {
@@ -540,8 +540,11 @@ public struct SafeZIPExtractor: Sendable {
     }
 
     private func decodedName(_ data: Data, flags: UInt16) throws -> String {
-        if let value = String(data: data, encoding: .utf8) { return value }
-        if flags & 0x0800 == 0, data.allSatisfy({ $0 < 0x80 }) {
+        if let value = ArchiveFilenameDecoder.decode(data) { return value }
+        if flags & 0x0800 != 0 {
+            throw SafeZIPError.unsupportedFilenameEncoding
+        }
+        if data.allSatisfy({ $0 < 0x80 }) {
             return String(decoding: data, as: UTF8.self)
         }
         throw SafeZIPError.unsupportedFilenameEncoding

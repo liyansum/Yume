@@ -14,6 +14,7 @@ recorded in `ThirdParty/RuntimeDependencies.lock.json`.
 | Ruffle | MIT OR Apache-2.0 | `ThirdParty/BundledResources/Runtimes/Ruffle/LICENSE_MIT`, `ThirdParty/BundledResources/Runtimes/Ruffle/LICENSE_APACHE` |
 | PLzmaSDK / LZMA SDK | MIT and LZMA SDK public-domain notice | `ThirdParty/PLzmaSDK/LICENSE` |
 | minizip-ng | zlib | `ThirdParty/MinizipNG/Sources/CMinizipNG/LICENSE` |
+| libarchive (RAR/RAR5 read-only subset) | BSD-2-Clause | `ThirdParty/Libarchive/COPYING` |
 | Noto Serif CJK default runtime font | SIL Open Font License 1.1 | `ThirdParty/BundledResources/Runtimes/AetherKiri/OFL.txt` |
 
 Apple system frameworks and the Swift standard libraries are supplied by the

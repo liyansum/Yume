@@ -1,7 +1,9 @@
 #include "CYumeZlib.h"
 
+#include <iconv.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <zlib.h>
@@ -331,4 +333,52 @@ int32_t yume_zlib_inflate_mem(
 
     if (result == YUME_ZIP_OK) *written_byte_count = written;
     return result;
+}
+
+int32_t yume_decode_archive_filename(
+    const unsigned char *bytes,
+    uint32_t byte_count,
+    char *utf8_out,
+    uint32_t utf8_capacity,
+    uint32_t *utf8_length
+) {
+    if (bytes == NULL || utf8_out == NULL || utf8_length == NULL || utf8_capacity < 2) {
+        return -1;
+    }
+
+    static const char *encodings[] = {
+        "UTF-8",
+        "CP932",
+        "SHIFT_JIS",
+        "GBK",
+        "GB18030",
+        "BIG5",
+        "EUC-KR",
+        "CP437",
+        NULL
+    };
+
+    for (int index = 0; encodings[index] != NULL; ++index) {
+        iconv_t converter = iconv_open("UTF-8", encodings[index]);
+        if (converter == (iconv_t)-1) continue;
+
+        char *input = (char *)bytes;
+        size_t input_remaining = byte_count;
+        char *output = utf8_out;
+        size_t output_remaining = utf8_capacity - 1;
+        size_t converted = iconv(
+            converter,
+            &input,
+            &input_remaining,
+            &output,
+            &output_remaining
+        );
+        iconv_close(converter);
+        if (converted == (size_t)-1 || input_remaining != 0) continue;
+
+        *output = '\0';
+        *utf8_length = (uint32_t)((utf8_capacity - 1) - output_remaining);
+        return 0;
+    }
+    return -1;
 }
