@@ -251,16 +251,46 @@ void TVPInitFontNames() {
         return data;
     };
 
-    auto tryLoadFontDirect = [&tryReadFont](const std::string &path,
-                                            const std::string &label) -> bool {
+    auto tryLoadFontDirect = [tryReadFont](const std::string &path,
+                                           const std::string &label) -> bool {
         auto fdata = tryReadFont(path);
         if(fdata.empty())
             return false;
         spdlog::info("loaded font: {}", path);
         spdlog::default_logger()->flush();
+
+        auto registerFace = [tryReadFont, label](const ttstr &name) {
+            TVPFontNamePathInfo info;
+            info.Path = label.c_str();
+            info.Index = 0;
+            info.Getter = [tryReadFont](TVPFontNamePathInfo *fontInfo)
+                -> tTJSBinaryStream * {
+                auto d = tryReadFont(fontInfo->Path.AsStdString());
+                if(d.empty())
+                    return nullptr;
+                auto *ret = new tTVPMemoryStream();
+                ret->WriteBuffer(d.data(), d.size());
+                ret->SetPosition(0);
+                return ret;
+            };
+            TVPFontNames.Add(name, info);
+        };
+
+#if defined(__APPLE__) && TARGET_OS_IOS
+        // Device logs abort (signal 6) inside FreeType SFNT name-table
+        // parsing after default.otf loads and before any face is
+        // registered. Register a usable default face from the file we
+        // already read; glyph rasterization still goes through FreeType
+        // later via Getter.
+        registerFace(ttstr("default"));
+        registerFace(ttstr("Default"));
+        spdlog::info("enumerated font faces=1 path={} (ios-safe)", path);
+        spdlog::default_logger()->flush();
+        return true;
+#else
         const int faces = TVPInternalEnumFonts(
-            fdata.data(), fdata.size(), label.c_str(),
-            [&tryReadFont](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
+            fdata.data(), static_cast<int>(fdata.size()), label.c_str(),
+            [tryReadFont](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
                 auto d = tryReadFont(info->Path.AsStdString());
                 if(d.empty())
                     return nullptr;
@@ -272,6 +302,7 @@ void TVPInitFontNames() {
         spdlog::info("enumerated font faces={} path={}", faces, path);
         spdlog::default_logger()->flush();
         return faces > 0;
+#endif
     };
 
     auto tryLoadFontStorageOrDirect = [&tryLoadFontDirect](const ttstr &path) -> bool {
@@ -542,6 +573,15 @@ void TVPInitFontNames() {
         // set default fontface name
         TVPDefaultFontName = TVPFontNames.GetLast().GetKey();
     }
+
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(!TVPDefaultFontName.IsEmpty()) {
+        spdlog::info("TVPInitFontNames: iOS using bundled font only, default={}",
+                     TVPDefaultFontName.AsStdString());
+        spdlog::default_logger()->flush();
+        return;
+    }
+#endif
 
     tTJSVariant fontDirOpt;
     if(TVPGetCommandLine(TJS_W("font_dir"), &fontDirOpt)) {

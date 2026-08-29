@@ -1,18 +1,29 @@
 # Yume 当前任务状态
 
-> 当前任务：修复 IPA 链接失败、Kirikiri SIGABRT、Ren'Py pyobjus，并加入每游戏 7.x/8.x 选择
-> 状态：代码已完成，待编译 IPA（build 11）
+> 当前任务：根据 build 11 真机日志修复 Kirikiri 字体 abort、Ren'Py `main.py.py`、mkxp 窗口尺寸
+> 状态：代码已完成，待编译 IPA（build 12）
 > 最后更新：2026-08-30
 
-## 根因
+## 根因（build 11 日志）
 
-- IPA：`mkxp_setHostNativeLayer` 写在会进预编译 `libmkxpz-core.a` 的源里，CI 没有重编该库。
-- Kirikiri：StartApplication 在后台线程跑，加载 default.otf 后 SIGABRT。
-- Ren'Py：chdir 进 Windows 导出目录后 `lib/python2.7/iosupport.py` 用 pyobjus 找 macOS Foundation。
-- RPG Maker：构建 7 已正确识别 VX Ace 并启动 RGSS 线程，但 SDL 全屏窗口仍盖住 LiveContainer。
+- Kirikiri：`loaded font: .../default.otf` 之后、`enumerated font faces=` 之前 SIGABRT(6)。崩溃在 `TVPInternalEnumFonts` 的 FreeType SFNT 名表解析，不是主线程问题。
+- Ren'Py：官方 `launcher_main` 对 argv[0] 做 `basename + ".py"`，再在 `dirname(argv[0])/base/` 下找脚本。传入 `.../base/main.py` 变成 `main.py.py`，两代都 `engine.main-returned result=2`。7.x 再启动 SIGSEGV(11)。
+- RPG Maker：`mkxp_setHostViewSize` 传了像素，`SDL_SetWindowSize` 在 iOS 只污染逻辑尺寸缓存。`graphics-init winSize=1179x2556 backingScale=1.00`。
 
 ## 修复
 
-- CI 在 staging 后从源码重编 `libmkxpz-core.a`。
-- Kirikiri 创建/打开/取帧回到主线程。
-- Ren'Py chdir 到捆绑 base；存档路径优先 `RENPY_PATH_TO_SAVES`；详情页可手动选 7.x/8.x。
+- Kirikiri iOS：加载 `default.otf` 后直接注册 `default` 字体面，跳过 SFNT 枚举和额外字体目录。
+- Ren'Py：argv[0] 改为 `Runtimes/RenPy{Legacy|Modern}/main`（无 `.py`），chdir 到含 `base/` 的世代根目录，并设置 `PYTHONHOME` 为 `base/`。
+- mkxp：宿主尺寸改为 point；iOS 不再 `SDL_SetWindowSize`；graphics-init 优先用宿主 point 尺寸计算 backingScale。
+
+## 验证
+
+- 已通过：`./Scripts/verify_pretest.sh`（129 tests）
+- 待：GitHub Actions `Build test IPA`（build 12）
+- 待：真机日志确认 `enumerated font faces=1 (ios-safe)`、`engine.argv0=.../RenPy*/main` 且不再出现 `main.py.py`、`host.view-size points=` 且 `backingScale` 不为 1.00
+
+## 下一步
+
+1. 跑 pretest
+2. 提交并推送 `main`
+3. `gh workflow run "Build test IPA"`

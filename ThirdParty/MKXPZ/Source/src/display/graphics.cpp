@@ -534,6 +534,12 @@ struct GraphicsPrivate {
         {
             int winW, winH;
             SDL_GetWindowSize(rtData->window, &winW, &winH);
+            int hostW = 0, hostH = 0;
+            mkxp_getHostViewSize(&hostW, &hostH);
+            if (hostW > 0 && hostH > 0) {
+                winW = hostW;
+                winH = hostH;
+            }
             winSize = Vec2i(winW, winH);
 
             int drwW, drwH;
@@ -546,7 +552,8 @@ struct GraphicsPrivate {
                 drwW = eglW;
                 drwH = eglH;
             }
-            backingScaleFactor = (float)drwW / winW;
+            if (winW > 0)
+                backingScaleFactor = (float)drwW / winW;
             winSize = Vec2i(drwW, drwH);
         }
 
@@ -559,15 +566,18 @@ struct GraphicsPrivate {
         // the per-session log file the host opens at game launch
         // (Debug()'s std::cerr goes nowhere on iOS).
         if (mkxp_debugLogEnabled()) {
-            char msg[320];
+            int hostW = 0, hostH = 0;
+            mkxp_getHostViewSize(&hostW, &hostH);
+            char msg[384];
             std::snprintf(msg, sizeof(msg),
                           "scRes=%dx%d scResLores=%dx%d winSize=%dx%d "
-                          "backingScale=%.2f enableHires=%d "
+                          "hostView=%dx%d backingScale=%.2f enableHires=%d "
                           "framebufferScalingFactor=%.2f smoothScaling=%d "
                           "fastForwardMultiplier=%d",
                           scRes.x, scRes.y,
                           scResLores.x, scResLores.y,
                           winSize.x, winSize.y,
+                          hostW, hostH,
                           backingScaleFactor,
                           rtData->config.enableHires ? 1 : 0,
                           rtData->config.framebufferScalingFactor,

@@ -29,6 +29,7 @@
 #include <SDL_ttf.h>
 
 #include <assert.h>
+#include <cstdio>
 #include <pthread/qos.h>
 #include <string.h>
 #include <string>
@@ -456,8 +457,18 @@ static SDL_Window *createPersistentWindow(const Config &initConf) {
   else {
     int hostW = 0, hostH = 0;
     mkxp_getHostViewSize(&hostW, &hostH);
+    char hostLine[96];
+    std::snprintf(hostLine, sizeof(hostLine),
+                  "hostView=%dx%d (points)", hostW, hostH);
+    mkxp_debugLog("INFO", "create-window", hostLine);
+#if !TARGET_OS_IPHONE
+    // iOS SDL owns a fullscreen UIWindow. SDL_SetWindowSize only
+    // poisons the logical size cache (see eventthread.cpp
+    // REQUEST_WINRESIZE). Logical size comes from the host view;
+    // ANGLE draws into the host CAMetalLayer.
     if (hostW > 0 && hostH > 0)
       SDL_SetWindowSize(win, hostW, hostH);
+#endif
     mkxp_demoteSDLWindow(win);
   }
 

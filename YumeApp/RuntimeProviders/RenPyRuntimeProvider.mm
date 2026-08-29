@@ -282,6 +282,10 @@ static UIWindow *FindSDLUIKitWindow(void) {
         std::string gameRoot = session->contentRoot;
         AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
         AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
+        // Official launcher_main does take_argv0(argv[0]) then strcat(".py")
+        // and looks for dirname(argv[0]) + "/base/" + basename + ".py",
+        // falling back to dirname(argv[0]) + "/base/main.py". argv[0] must
+        // be the runtime generation directory plus a name WITHOUT .py.
         char *arguments[] = {
             executableArgument.data(),
             baseDirectoryOption.data(),
@@ -417,7 +421,8 @@ static int32_t RenPyStart(void *opaque) {
     NSURL *runtimeRoot = [[NSBundle mainBundle].resourceURL
         URLByAppendingPathComponent:@"Runtimes" isDirectory:YES];
     runtimeRoot = [runtimeRoot URLByAppendingPathComponent:generation isDirectory:YES];
-    NSString *base = [[runtimeRoot URLByAppendingPathComponent:@"base" isDirectory:YES] path];
+    NSString *generationRoot = [runtimeRoot path];
+    NSString *base = [generationRoot stringByAppendingPathComponent:@"base"];
     if (![[NSFileManager defaultManager]
             fileExistsAtPath:[base stringByAppendingPathComponent:@"main.py"]]) {
         session->running.store(false);
@@ -430,12 +435,16 @@ static int32_t RenPyStart(void *opaque) {
     setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
     setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
     setenv("RENPY_LOG_TO_STDOUT", "1", 1);
+    setenv("PYTHONHOME", base.UTF8String ?: "", 1);
     InstallRenPyCrashBreadcrumb(session);
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
-    session->runtimeBasePath = base.UTF8String ?: "";
-    session->launcherPath = [base stringByAppendingPathComponent:@"main.py"].UTF8String;
+    // chdir to the generation root (the directory that contains base/),
+    // never into the imported Windows tree. launcher_main on iOS looks
+    // for python home at dirname(argv[0])/base.
+    session->runtimeBasePath = generationRoot.UTF8String ?: "";
+    session->launcherPath = [generationRoot stringByAppendingPathComponent:@"main"].UTF8String;
     [session->view beginEmbedding];
     RenPyEmit(session, YUME_RUNTIME_EVENT_STARTED,
               session->generation == RenPyGeneration::Modern

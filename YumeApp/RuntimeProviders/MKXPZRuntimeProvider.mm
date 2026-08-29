@@ -389,11 +389,24 @@ static void MKXPInfo(const char *message, void *context) {
     mkxp_setHostNativeLayer((__bridge void *)self.layer);
     mkxp_setHostUIWindow((__bridge void *)self.window);
     const CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-    mkxp_setHostViewSize(
-        static_cast<int>(std::max(1.0, std::round(self.bounds.size.width * scale))),
-        static_cast<int>(std::max(1.0, std::round(self.bounds.size.height * scale))));
+    // SDL on iOS treats window size as points. Passing pixels poisons
+    // SDL_GetWindowSize so graphics-init reports winSize=devicePixels
+    // with backingScale=1.00 and the Metal drawable fills the guest
+    // screen instead of the player view.
+    const int pointW = static_cast<int>(std::max(1.0, std::round(self.bounds.size.width)));
+    const int pointH = static_cast<int>(std::max(1.0, std::round(self.bounds.size.height)));
+    mkxp_setHostViewSize(pointW, pointH);
     [self.window makeKeyAndVisible];
     AppendMKXPHostLog(_session, "view.in-window");
+    {
+        char sizeLine[160];
+        std::snprintf(sizeLine, sizeof(sizeLine),
+                      "host.view-size points=%dx%d scale=%.2f pixels=%.0fx%.0f",
+                      pointW, pointH, (double)scale,
+                      std::round(self.bounds.size.width * scale),
+                      std::round(self.bounds.size.height * scale));
+        AppendMKXPHostLog(_session, sizeLine);
+    }
     MKXPSession *session = _session;
     AppendMKXPHostLog(session, "engine.game-path-set.begin");
     mkxp_setGamePath(session->contentRoot.c_str());
@@ -424,6 +437,11 @@ static void MKXPInfo(const char *message, void *context) {
     [self syncHostMetalLayer];
     UIEdgeInsets safe = self.safeAreaInsets;
     mkxp_setSafeAreaInsets(safe.top, safe.bottom, safe.left, safe.right);
+    if (!CGRectIsEmpty(self.bounds)) {
+        mkxp_setHostViewSize(
+            static_cast<int>(std::max(1.0, std::round(self.bounds.size.width))),
+            static_cast<int>(std::max(1.0, std::round(self.bounds.size.height))));
+    }
     [self startEngineIfAttached];
 }
 
