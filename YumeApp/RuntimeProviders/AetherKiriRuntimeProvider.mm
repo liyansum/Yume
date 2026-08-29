@@ -536,7 +536,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
             result = engine_send_input(_engine, &event);
             if (result != ENGINE_RESULT_OK) *stop = YES;
         }];
-    }];
+    });
     return static_cast<int32_t>(result);
 }
 
