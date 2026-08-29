@@ -64,6 +64,7 @@ static void showInitError(const std::string &msg);
 static bool initANGLE(SDL_Window *win);
 static void teardownANGLE();
 extern "C" void *mkxp_getANGLENativeLayer(void *sdlWindow);
+extern "C" void mkxp_demoteSDLWindow(void *sdlWindow);
 
 static inline const char *glGetStringInt(GLenum name) {
   return (const char *)gl.GetString(name);
@@ -432,7 +433,11 @@ static void shutdownSDLLibs() {
  * because ANGLE uses a plain CALayer (not a CAEAGLLayer) as its
  * native window. Returns nullptr on failure after posting an error. */
 static SDL_Window *createPersistentWindow(const Config &initConf) {
-  Uint32 winFlags = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_ALLOW_HIGHDPI;
+  /* Keep the SDL UIWindow hidden. ANGLE renders into the Yume host
+   * CALayer; a second visible UIWindow covers LiveContainer's guest
+   * scene and presents as a black screen or a watchdog kill. */
+  Uint32 winFlags = SDL_WINDOW_HIDDEN | SDL_WINDOW_BORDERLESS |
+                    SDL_WINDOW_ALLOW_HIGHDPI;
 
   /* Allow all orientations. Without this, SDL infers supported
    * orientations from the window w/h: a landscape-shaped game
@@ -448,6 +453,8 @@ static SDL_Window *createPersistentWindow(const Config &initConf) {
 
   if (!win)
     showInitError(std::string("Error creating window: ") + SDL_GetError());
+  else
+    mkxp_demoteSDLWindow(win);
 
   return win;
 }

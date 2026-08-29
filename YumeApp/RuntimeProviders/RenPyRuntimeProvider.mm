@@ -26,6 +26,7 @@ struct RenPySession;
 @interface YumeRenPyHostView : UIView
 - (instancetype)initWithSession:(RenPySession *)session;
 - (void)beginEmbedding;
+- (void)startEngineIfAttached;
 - (void)detachSession;
 @end
 
@@ -33,6 +34,7 @@ struct RenPySession {
     std::string contentRoot;
     std::string saveRoot;
     std::string logRoot;
+    std::string launcherPath;
     RenPyGeneration generation = RenPyGeneration::Modern;
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
@@ -228,6 +230,7 @@ static UIWindow *FindSDLUIKitWindow(void) {
     CADisplayLink *_embeddingLink;
     __weak UIView *_embeddedGameView;
     __weak UIWindow *_sdlWindow;
+    BOOL _sdlStarted;
 }
 
 - (instancetype)initWithSession:(RenPySession *)session {
@@ -238,6 +241,55 @@ static UIWindow *FindSDLUIKitWindow(void) {
         self.clipsToBounds = YES;
     }
     return self;
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [self startEngineIfAttached];
+}
+
+- (void)startEngineIfAttached {
+    if (_sdlStarted || _session == nullptr || self.window == nil) return;
+    if (CGRectIsEmpty(self.bounds)) return;
+    _sdlStarted = YES;
+    [self.window makeKeyAndVisible];
+    AppendRenPyHostLog(_session, "view.in-window");
+    RenPySession *session = _session;
+    std::string executable = session->launcherPath;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AppendRenPyHostLog(session, "engine.sdl-main.begin");
+        if (!session->contentRoot.empty()) {
+            (void)chdir(session->contentRoot.c_str());
+        }
+        SDL_SetMainReady();
+        std::string executableArgument = executable;
+        std::string baseDirectoryOption = "--basedir";
+        std::string gameRoot = session->contentRoot;
+        AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
+        AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
+        char *arguments[] = {
+            executableArgument.data(),
+            baseDirectoryOption.data(),
+            gameRoot.data(),
+            nullptr
+        };
+        int result = session->generation == RenPyGeneration::Modern
+            ? yume_renpy_modern_main(3, arguments)
+            : yume_renpy_legacy_main(3, arguments);
+        std::string resultLine = "engine.main-returned result=" + std::to_string(result);
+        AppendRenPyHostLog(session, resultLine.c_str());
+        session->mainReturned.store(true);
+        session->running.store(false);
+        [session->view detachSession];
+        if (result != 0) RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.engine-error");
+        if (!session->stoppedEventSent.exchange(true)) {
+            RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED, "renpy.stopped");
+        }
+        if (session->destroyRequested.load()) {
+            session->view = nil;
+            delete session;
+        }
+    });
 }
 
 - (void)beginEmbedding {
@@ -282,6 +334,7 @@ static UIWindow *FindSDLUIKitWindow(void) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     _embeddedGameView.frame = self.bounds;
+    [self startEngineIfAttached];
 }
 
 - (void)detachSession {
@@ -366,50 +419,12 @@ static int32_t RenPyStart(void *opaque) {
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
+    session->launcherPath = [base stringByAppendingPathComponent:@"main.py"].UTF8String;
     [session->view beginEmbedding];
     RenPyEmit(session, YUME_RUNTIME_EVENT_STARTED,
               session->generation == RenPyGeneration::Modern
                   ? "renpy.modern-started" : "renpy.legacy-started");
-
-    // Point argv[0] at the real main.py so launcher_main/path_to_renpy_base
-    // resolve the bundled runtime, not a missing yume-renpy placeholder.
-    std::string executable = [base stringByAppendingPathComponent:@"main.py"].UTF8String;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        AppendRenPyHostLog(session, "engine.sdl-main.begin");
-        if (!session->contentRoot.empty()) {
-            (void)chdir(session->contentRoot.c_str());
-        }
-        SDL_SetMainReady();
-        std::string executableArgument = executable;
-        std::string baseDirectoryOption = "--basedir";
-        // --basedir is the imported project (the folder that contains game/).
-        // Bundled Python lives next to argv[0] / main.py via path_to_renpy_base().
-        std::string gameRoot = session->contentRoot;
-        AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
-        AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
-        char *arguments[] = {
-            executableArgument.data(),
-            baseDirectoryOption.data(),
-            gameRoot.data(),
-            nullptr
-        };
-        int result = session->generation == RenPyGeneration::Modern
-            ? yume_renpy_modern_main(3, arguments)
-            : yume_renpy_legacy_main(3, arguments);
-        std::string resultLine = "engine.main-returned result=" + std::to_string(result);
-        AppendRenPyHostLog(session, resultLine.c_str());
-        session->mainReturned.store(true);
-        session->running.store(false);
-        [session->view detachSession];
-        if (result != 0) RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.engine-error");
-        if (!session->stoppedEventSent.exchange(true)) {
-            RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED, "renpy.stopped");
-        }
-        if (session->destroyRequested.load()) {
-            session->view = nil;
-            delete session;
-        }
-    });
+    [session->view startEngineIfAttached];
     return 0;
 }
 

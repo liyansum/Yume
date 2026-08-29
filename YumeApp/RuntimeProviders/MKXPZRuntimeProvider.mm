@@ -5,8 +5,10 @@
 
 #include <atomic>
 #include <cstdio>
+#include <fcntl.h>
 #include <mutex>
 #include <new>
+#include <signal.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -24,8 +26,8 @@ struct MKXPSession;
 
 @interface YumeMKXPHostView : UIView
 - (instancetype)initWithSession:(MKXPSession *)session;
-- (void)beginEmbedding;
-- (BOOL)embedIfAvailable;
+- (void)startEngineIfAttached;
+- (void)syncHostMetalLayer;
 - (void)detachSession;
 @end
 
@@ -77,6 +79,55 @@ static void AppendMKXPHostLog(MKXPSession *session, const char *message) {
 
 static std::mutex gMKXPClaimMutex;
 static bool gMKXPClaimed = false;
+static volatile sig_atomic_t gMKXPCrashLogFD = -1;
+
+static void MKXPCrashSignalHandler(int signalNumber) {
+    const int fd = static_cast<int>(gMKXPCrashLogFD);
+    if (fd < 0) return;
+    static const char prefix[] = "native.crash signal=";
+    (void)write(fd, prefix, sizeof(prefix) - 1);
+    char number[16] = {};
+    unsigned int value = signalNumber < 0
+        ? static_cast<unsigned int>(-signalNumber)
+        : static_cast<unsigned int>(signalNumber);
+    int index = static_cast<int>(sizeof(number)) - 2;
+    do {
+        number[index--] = static_cast<char>('0' + value % 10u);
+        value /= 10u;
+    } while (value > 0 && index >= 0);
+    if (signalNumber < 0 && index >= 0) number[index--] = '-';
+    (void)write(fd, number + index + 1, sizeof(number) - index - 2);
+    (void)write(fd, "\n", 1);
+    (void)fsync(fd);
+}
+
+static void InstallMKXPCrashBreadcrumb(MKXPSession *session) {
+    if (session == nullptr || session->logRoot.empty()) return;
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
+        if (root.length == 0) return;
+        [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *path = [root stringByAppendingPathComponent:@"mkxp-crash.log"];
+        const int fd = open(path.fileSystemRepresentation,
+                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        if (fd < 0) return;
+        const int previous = static_cast<int>(gMKXPCrashLogFD);
+        gMKXPCrashLogFD = fd;
+        if (previous >= 0) close(previous);
+        const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
+        for (const int signalNumber : signals) {
+            struct sigaction action {};
+            action.sa_handler = MKXPCrashSignalHandler;
+            sigemptyset(&action.sa_mask);
+            action.sa_flags = SA_RESETHAND;
+            (void)sigaction(signalNumber, &action, nullptr);
+        }
+    }
+    AppendMKXPHostLog(session, "crash-handler.install.end");
+}
 
 static void ReleaseMKXPClaimAfterFailedCreation(void) {
     std::lock_guard<std::mutex> lock(gMKXPClaimMutex);
@@ -229,9 +280,12 @@ static void ConfigureMKXP(MKXPSession *session) {
             config.syntaxTransformMode = MKXP_SYNTAX_TRANSFORM_LEGACY;
             break;
     }
+    AppendMKXPHostLog(session, "configure.apply-session-config.begin");
     mkxp_applySessionConfig(&config);
+    AppendMKXPHostLog(session, "configure.apply-session-config.end");
     mkxp_setLauncherIdentity("yume");
     NSString *overlay = ConfigOverlayJSON(session->rtpRoots, session->rgss);
+    AppendMKXPHostLog(session, overlay.UTF8String ?: "configure.overlay=<nil>");
     mkxp_setConfigOverlayJSON(overlay.UTF8String);
     if (!session->logRoot.empty()) {
         NSString *logRoot = [NSString stringWithUTF8String:session->logRoot.c_str()];
@@ -245,7 +299,7 @@ static void MKXPFirstFrame(void *context) {
     AppendMKXPHostLog(session, "frame.first-frame");
     dispatch_async(dispatch_get_main_queue(), ^{
         if (session != nullptr && session->view != nil) {
-            [session->view embedIfAvailable];
+            [session->view syncHostMetalLayer];
         }
     });
     MKXPEmit(session, YUME_RUNTIME_EVENT_FIRST_FRAME, "mkxp.first-frame");
@@ -283,9 +337,7 @@ static void MKXPInfo(const char *message, void *context) {
 
 @implementation YumeMKXPHostView {
     MKXPSession *_session;
-    CADisplayLink *_embeddingLink;
-    __weak UIView *_embeddedGameView;
-    __weak UIWindow *_sdlWindow;
+    BOOL _sdlStarted;
 }
 
 - (instancetype)initWithSession:(MKXPSession *)session {
@@ -294,45 +346,16 @@ static void MKXPInfo(const char *message, void *context) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
+        self.layer.contentsScale = UIScreen.mainScreen.nativeScale;
     }
     return self;
 }
 
-- (void)beginEmbedding {
-    if (_embeddingLink != nil) return;
-    _embeddingLink = [CADisplayLink displayLinkWithTarget:self
-                                                 selector:@selector(pollForSDLView:)];
-    [_embeddingLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-}
-
-- (void)pollForSDLView:(CADisplayLink *)link {
-    if (_embeddedGameView != nil) {
-        _embeddedGameView.frame = self.bounds;
-        return;
-    }
-    if ([self embedIfAvailable]) link.paused = YES;
-}
-
-- (void)adoptSDLView:(UIView *)gameView fromWindow:(UIWindow *)window {
-    if (gameView == nil || window == nil) return;
-    [gameView removeFromSuperview];
-    gameView.frame = self.bounds;
-    gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                UIViewAutoresizingFlexibleHeight;
-    [self insertSubview:gameView atIndex:0];
-    // LiveContainer only composites the guest app's original UIWindow.
-    // Hiding SDL's extra window (or leaving it key) blacks out Metal.
-    // Keep the SDL window alive for ANGLE, but hand key status back.
-    window.userInteractionEnabled = NO;
-    window.windowLevel = UIWindowLevelNormal - 1;
-    window.alpha = 0;
-    window.hidden = NO;
-    UIWindow *hostWindow = self.window;
-    if (hostWindow != nil) [hostWindow makeKeyAndVisible];
-    CGFloat scale = hostWindow.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-    gameView.layer.contentsScale = scale;
-    CGRect bounds = gameView.layer.bounds;
-    for (CALayer *sublayer in gameView.layer.sublayers) {
+- (void)syncHostMetalLayer {
+    CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
+    self.layer.contentsScale = scale;
+    CGRect bounds = self.layer.bounds;
+    for (CALayer *sublayer in self.layer.sublayers) {
         if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
             CAMetalLayer *metal = (CAMetalLayer *)sublayer;
             metal.frame = bounds;
@@ -341,84 +364,57 @@ static void MKXPInfo(const char *message, void *context) {
                                             bounds.size.height * scale);
         }
     }
-    _embeddedGameView = gameView;
-    _sdlWindow = window;
 }
 
-- (UIView *)sdlGameViewInWindow:(UIWindow *)window {
-    UIView *root = window.rootViewController.view ?: window;
-    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
-    while (stack.count > 0) {
-        UIView *candidate = stack.firstObject;
-        [stack removeObjectAtIndex:0];
-        NSString *name = NSStringFromClass(candidate.class);
-        if ([name.lowercaseString containsString:@"sdl"] &&
-            [name.lowercaseString containsString:@"view"]) {
-            return candidate;
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [self startEngineIfAttached];
+}
+
+- (void)startEngineIfAttached {
+    if (_sdlStarted || _session == nullptr || self.window == nil) return;
+    if (CGRectIsEmpty(self.bounds)) return;
+    _sdlStarted = YES;
+    mkxp_setHostNativeLayer((__bridge void *)self.layer);
+    mkxp_setHostUIWindow((__bridge void *)self.window);
+    [self.window makeKeyAndVisible];
+    AppendMKXPHostLog(_session, "view.in-window");
+    MKXPSession *session = _session;
+    AppendMKXPHostLog(session, "engine.game-path-set.begin");
+    mkxp_setGamePath(session->contentRoot.c_str());
+    AppendMKXPHostLog(session, "engine.game-path-set.end");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        AppendMKXPHostLog(session, "engine.main-enter");
+        SDL_SetMainReady();
+        AppendMKXPHostLog(session, "engine.sdl-main.begin");
+        char executable[] = "yume-mkxp-z";
+        char *arguments[] = {executable, nullptr};
+        (void)SDL_main(1, arguments);
+        AppendMKXPHostLog(session, "engine.main-returned");
+        session->mainReturned.store(true);
+        session->running.store(false);
+        [session->view detachSession];
+        if (!session->stoppedEventSent.exchange(true)) {
+            MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped");
         }
-        [stack addObjectsFromArray:candidate.subviews];
-    }
-    return window.rootViewController.view;
-}
-
-- (BOOL)embedIfAvailable {
-    if (_embeddedGameView != nil) return YES;
-    void *windowPointer = mkxp_getSDLUIKitWindow();
-    if (windowPointer == nullptr) return NO;
-    UIWindow *window = (__bridge UIWindow *)windowPointer;
-    UIView *gameView = [self sdlGameViewInWindow:window];
-    if (gameView == nil) return NO;
-    if (window == self.window && gameView == window.rootViewController.view) {
-        AppendMKXPHostLog(_session, "view.embed-skip-host-window");
-        return YES;
-    }
-    [self adoptSDLView:gameView fromWindow:window];
-    AppendMKXPHostLog(_session, "view.embedded");
-    return YES;
+        if (session->destroyRequested.load()) {
+            session->view = nil;
+            delete session;
+        }
+    });
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    _embeddedGameView.frame = self.bounds;
-    UIView *gameView = _embeddedGameView;
-    if (gameView != nil) {
-        CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-        gameView.layer.contentsScale = scale;
-        CGRect bounds = gameView.layer.bounds;
-        for (CALayer *sublayer in gameView.layer.sublayers) {
-            if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
-                CAMetalLayer *metal = (CAMetalLayer *)sublayer;
-                metal.frame = bounds;
-                metal.contentsScale = scale;
-                metal.drawableSize = CGSizeMake(bounds.size.width * scale,
-                                                bounds.size.height * scale);
-            }
-        }
-    }
+    [self syncHostMetalLayer];
     UIEdgeInsets safe = self.safeAreaInsets;
     mkxp_setSafeAreaInsets(safe.top, safe.bottom, safe.left, safe.right);
-}
-
-- (void)restoreSDLView {
-    [_embeddingLink invalidate];
-    _embeddingLink = nil;
-    UIView *gameView = _embeddedGameView;
-    UIWindow *window = _sdlWindow;
-    _embeddedGameView = nil;
-    _sdlWindow = nil;
-    if (gameView == nil || window == nil) return;
-    [gameView removeFromSuperview];
-    gameView.frame = window.bounds;
-    gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                                UIViewAutoresizingFlexibleHeight;
-    [window addSubview:gameView];
-    window.alpha = 1;
-    window.userInteractionEnabled = YES;
-    window.hidden = NO;
+    [self startEngineIfAttached];
 }
 
 - (void)detachSession {
-    [self restoreSDLView];
+    mkxp_setHostNativeLayer(nullptr);
+    mkxp_setHostUIWindow(nullptr);
     _session = nullptr;
 }
 
@@ -478,6 +474,7 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
         ReleaseMKXPClaimAfterFailedCreation();
         return -3;
     }
+    InstallMKXPCrashBreadcrumb(session);
     *providerSession = session;
     return 0;
 }
@@ -499,36 +496,10 @@ static int32_t MKXPStart(void *opaque) {
     mkxp_setErrorMessageCallback(MKXPError, session);
     mkxp_setInfoMessageCallback(MKXPInfo, session);
     session->everStarted.store(true);
-    [session->view beginEmbedding];
     MKXPEmit(session, YUME_RUNTIME_EVENT_STARTED, "mkxp.started");
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        AppendMKXPHostLog(session, "engine.main-enter");
-        // LiveContainer's guest run loop does not always drain a nested
-        // dispatch_async while mkxp_waitForGamePath pumps CFRunLoop, so the
-        // previous deferred setGamePath never fired and the player stayed
-        // black. The host view is already attached by GamePlayerView before
-        // this block runs; set the path first, then enter SDL_main.
-        AppendMKXPHostLog(session, "engine.game-path-set.begin");
-        mkxp_setGamePath(session->contentRoot.c_str());
-        AppendMKXPHostLog(session, "engine.game-path-set.end");
-        SDL_SetMainReady();
-        AppendMKXPHostLog(session, "engine.sdl-main.begin");
-        char executable[] = "yume-mkxp-z";
-        char *arguments[] = {executable, nullptr};
-        (void)SDL_main(1, arguments);
-        AppendMKXPHostLog(session, "engine.main-returned");
-        session->mainReturned.store(true);
-        session->running.store(false);
-        [session->view detachSession];
-        if (!session->stoppedEventSent.exchange(true)) {
-            MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped");
-        }
-        if (session->destroyRequested.load()) {
-            session->view = nil;
-            delete session;
-        }
-    });
+    // SDL_main must wait until this view is in the host window so ANGLE
+    // can bind the visible CALayer. didMoveToWindow / layoutSubviews start it.
+    [session->view startEngineIfAttached];
     return 0;
 }
 

@@ -512,6 +512,25 @@ void *mkxp_getSDLUIKitWindow(void) {
     return info.info.uikit.window;
 }
 
+static std::atomic<void *> s_hostNativeLayer{nullptr};
+static std::atomic<void *> s_hostUIWindow{nullptr};
+
+void mkxp_setHostNativeLayer(void *calayer) {
+    s_hostNativeLayer.store(calayer, std::memory_order_release);
+}
+
+void *mkxp_getHostNativeLayer(void) {
+    return s_hostNativeLayer.load(std::memory_order_acquire);
+}
+
+void mkxp_setHostUIWindow(void *uiwindow) {
+    s_hostUIWindow.store(uiwindow, std::memory_order_release);
+}
+
+void *mkxp_getHostUIWindow(void) {
+    return s_hostUIWindow.load(std::memory_order_acquire);
+}
+
 // Input bridge
 
 void mkxp_injectKeyEvent(int scancode, int pressed) {
@@ -1100,6 +1119,8 @@ void mkxp_resetSessionState(void) {
     // into the next game's boot. The host re-sets it per session.
     s_hostViewportRegion.store(0, std::memory_order_relaxed);
     s_safeAreaInsetsChanged.store(true, std::memory_order_release);
+    s_hostNativeLayer.store(nullptr, std::memory_order_release);
+    s_hostUIWindow.store(nullptr, std::memory_order_release);
 }
 
 void mkxp_setDebugLogPath(const char *path) {

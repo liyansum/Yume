@@ -4,8 +4,21 @@
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
 #include <SDL_syswm.h>
+#include "app_bridge.h"
+
+static CALayer *HostNativeLayer(void) {
+    void *pointer = mkxp_getHostNativeLayer();
+    return pointer != nullptr ? (__bridge CALayer *)pointer : nil;
+}
 
 extern "C" void *mkxp_getANGLENativeLayer(void *sdlWindow) {
+    CALayer *hostLayer = HostNativeLayer();
+    if (hostLayer != nil) {
+        UIScreen *screen = hostLayer.window.screen ?: UIScreen.mainScreen;
+        hostLayer.contentsScale = screen.nativeScale;
+        return (__bridge void *)hostLayer;
+    }
+
     SDL_SysWMinfo wmInfo;
     SDL_VERSION(&wmInfo.version);
     if (!SDL_GetWindowWMInfo((SDL_Window *)sdlWindow, &wmInfo))
@@ -19,6 +32,24 @@ extern "C" void *mkxp_getANGLENativeLayer(void *sdlWindow) {
     layer.contentsScale = uiWindow.screen.nativeScale;
 
     return (__bridge void *)layer;
+}
+
+extern "C" void mkxp_demoteSDLWindow(void *sdlWindow) {
+    SDL_SysWMinfo wmInfo;
+    SDL_VERSION(&wmInfo.version);
+    if (!SDL_GetWindowWMInfo((SDL_Window *)sdlWindow, &wmInfo))
+        return;
+    UIWindow *sdlWindowUI = wmInfo.info.uikit.window;
+    if (sdlWindowUI == nil) return;
+    sdlWindowUI.userInteractionEnabled = NO;
+    sdlWindowUI.windowLevel = UIWindowLevelNormal - 1;
+    sdlWindowUI.alpha = 0;
+    sdlWindowUI.hidden = YES;
+    void *hostPointer = mkxp_getHostUIWindow();
+    if (hostPointer != nullptr) {
+        UIWindow *host = (__bridge UIWindow *)hostPointer;
+        [host makeKeyAndVisible];
+    }
 }
 
 // Sync the CAMetalLayer (and its parent CALayer's contentsScale) to
@@ -40,13 +71,20 @@ extern "C" void mkxp_refreshANGLENativeLayerSize(void *sdlWindow,
     __block CGFloat pixelH = 0;
 
     dispatch_block_t work = ^{
-        SDL_SysWMinfo wmInfo;
-        SDL_VERSION(&wmInfo.version);
-        if (!SDL_GetWindowWMInfo((SDL_Window *)sdlWindow, &wmInfo))
-            return;
-        UIWindow *uiWindow = wmInfo.info.uikit.window;
-        CALayer *parentLayer = uiWindow.rootViewController.view.layer;
-        CGFloat scale = uiWindow.screen.nativeScale;
+        CALayer *parentLayer = HostNativeLayer();
+        CGFloat scale = UIScreen.mainScreen.nativeScale;
+        if (parentLayer == nil) {
+            SDL_SysWMinfo wmInfo;
+            SDL_VERSION(&wmInfo.version);
+            if (!SDL_GetWindowWMInfo((SDL_Window *)sdlWindow, &wmInfo))
+                return;
+            UIWindow *uiWindow = wmInfo.info.uikit.window;
+            parentLayer = uiWindow.rootViewController.view.layer;
+            scale = uiWindow.screen.nativeScale;
+        } else if (parentLayer.window.screen != nil) {
+            scale = parentLayer.window.screen.nativeScale;
+        }
+        if (parentLayer == nil) return;
 
         // contentsScale may have drifted if the window was moved to
         // another screen (iPad multitasking). Re-apply each time.

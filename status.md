@@ -1,18 +1,16 @@
 # Yume 当前任务状态
 
-> 当前任务：修复 Ren'Py / Kirikiri 闪退、RPG Maker 黑屏，并按 XP/VX/VX Ace 三代选择运行时
-> 状态：代码已完成，待验证并编译 IPA
-> 最后更新：2026-08-29
+> 当前任务：LiveContainer 下 RPG Maker 在 configure 后闪退/黑屏
+> 状态：代码已完成，待编译 IPA（build 8）
+> 最后更新：2026-08-30
 
 ## 根因
 
-- Kirikiri：`engine_open_game_async` 在内部线程跑 TVP，DisplayLink 却在创建线程取帧；LiveContainer 下 `Application Support` 路径再经 `file://./` 目录遍历会损坏。
-- RPG Maker：SDL 窗口被 `hidden=YES` 后 ANGLE/Metal 无法呈现；LiveContainer 里嵌套 `dispatch_async` 可能永远不执行 `mkxp_setGamePath`。XP/VX/VX Ace 只分了 Ruby 1.8/1.9，未把 `rgssVersion` 写入 mkxp 配置，VX 可能被当成 XP。
-- Ren'Py：同样藏起 SDL 窗口；argv[0] 指向不存在的 `yume-renpy`。
+构建 6/7 的 App 日志在 `mkxp.stage.configure.begin` 后约 12 秒进程消失。SDL 在主线程 `CreateWindow` 会新建 UIWindow 并抢 key window；LiveContainer 只合成宿主窗口，ANGLE 绑到那个不可见窗口后黑屏或被 watchdog 杀掉。App 日志异步，所以看不到 `native.started`。
 
 ## 修复
 
-- Kirikiri：专用引擎线程上同步 `engine_open_game`；iOS 存储名走直接 POSIX 路径。
-- RPG Maker：不隐藏 SDL 窗口、交还 key window；启动前设置 game path；按 Game.ini / Scripts 扩展名选择 RGSS1/2/3 与对应 Ruby 和 RTP。
-- Ren'Py：同样的窗口策略；argv[0] 指向真实 `main.py`；Python 输出与崩溃面包屑写入日志。
-- MV/MZ/Flash/Tyrano：WKWebView 允许内联媒体播放。
+- ANGLE 画到 Yume 播放器视图的 CALayer，不再依赖 SDL 的 UIWindow。
+- SDL 窗口以 HIDDEN 创建，创建后立即降级并交还 key window。
+- `SDL_main` 等到宿主视图进入窗口后再启动。
+- 崩溃信号写入 `mkxp-crash.log`。

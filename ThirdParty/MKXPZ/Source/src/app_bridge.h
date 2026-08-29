@@ -416,6 +416,14 @@ float       mkxp_getScreenScale(void);
 // same window stack as the game view on iOS.
 void       *mkxp_getSDLUIKitWindow(void);
 
+// Host CALayer used as ANGLE's Metal target. Set this to the Yume
+// player view's layer before SDL_main so rendering never depends on
+// an extra SDL UIWindow (LiveContainer cannot composite those).
+void        mkxp_setHostNativeLayer(void *calayer);
+void       *mkxp_getHostNativeLayer(void);
+void        mkxp_setHostUIWindow(void *uiwindow);
+void       *mkxp_getHostUIWindow(void);
+
 // Per-game settings (UI -> Engine), set by the host before engine
 // boot and read by the engine during the run.
 //
@@ -685,6 +693,10 @@ static inline void        mkxp_clearHostViewportRegion(void) {}
 static inline bool        mkxp_getHostViewportRegion(float *x, float *y, float *w, float *h, bool *isPortrait) { (void)x; (void)y; (void)w; (void)h; (void)isPortrait; return false; }
 static inline float       mkxp_getScreenScale(void) { return 1.0f; }
 static inline void       *mkxp_getSDLUIKitWindow(void) { return NULL; }
+static inline void        mkxp_setHostNativeLayer(void *calayer) { (void)calayer; }
+static inline void       *mkxp_getHostNativeLayer(void) { return NULL; }
+static inline void        mkxp_setHostUIWindow(void *uiwindow) { (void)uiwindow; }
+static inline void       *mkxp_getHostUIWindow(void) { return NULL; }
 
 static inline void        mkxp_applyPerGameSettings(MKXPVerticalAlignment verticalAlignment, bool postloadEnabled) { (void)verticalAlignment; (void)postloadEnabled; }
 // CENTER, not the mobile TOP_CENTER default: stock desktop mkxp-z
