@@ -65,6 +65,10 @@
 "import.failure.noSupportedGame" = "選択したフォルダから対応ゲームを識別できませんでした。";
 "import.failure.ambiguous" = "複数のゲームまたはエンジン候補が見つかったため、インポートしませんでした。";
 "import.failure.unsupported" = "ゲームは識別できましたが、このビルドで安全に実行できないコンポーネントが必要です。";
+"import.failure.nativeComponent" = "このゲームには Windows 専用の DLL または Node ネイティブプラグインが含まれており、iOS では安全に読み込めません。";
+"import.failure.invalidEngineArchive" = "ゲームアーカイブを識別しましたが、ヘッダーが拡張子と一致しません。破損、特殊な保護、または誤った名前変更の可能性があります。";
+"import.failure.unreadableEngineArchive" = "ゲームアーカイブを識別しましたが、安全確認のために読み取れませんでした。圧縮ファイルの構造とファイルプロバイダの権限を確認してください。";
+"import.failure.runtimeUnavailable" = "ゲームエンジンを識別しましたが、このビルドでは対応ランタイムを利用できません。";
 "import.failure.unreadable" = "選択したフォルダを読み込めなかったため、インポートしませんでした。";
 "import.failure.duplicate" = "同一のゲームがすでにライブラリにあります。既存のゲームとセーブは変更されていません。";
 "game.play" = "プレイ";

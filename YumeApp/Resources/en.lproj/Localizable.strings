@@ -65,6 +65,10 @@
 "import.failure.noSupportedGame" = "Yume could not identify a supported game in the selected folder.";
 "import.failure.ambiguous" = "More than one possible game or engine was found. Nothing was imported.";
 "import.failure.unsupported" = "The game was identified, but it requires components this build cannot safely run.";
+"import.failure.nativeComponent" = "The game contains a Windows-only DLL or native Node plugin that iOS cannot safely load.";
+"import.failure.invalidEngineArchive" = "The game archive was identified, but its header does not match its extension. It may be damaged, specially protected, or incorrectly renamed.";
+"import.failure.unreadableEngineArchive" = "The game archive was identified but could not be read for safety verification. Check the archive layout and Files provider access.";
+"import.failure.runtimeUnavailable" = "The game engine was identified, but its runtime is unavailable in this build.";
 "import.failure.unreadable" = "The selected folder could not be read. Nothing was imported.";
 "import.failure.duplicate" = "An identical game is already in the library. The existing game and saves were left unchanged.";
 "game.play" = "Play";

@@ -65,6 +65,10 @@
 "import.failure.noSupportedGame" = "Yume 未能在所选文件夹中识别出支持的游戏。";
 "import.failure.ambiguous" = "发现了多个可能的游戏或引擎，因此没有导入任何内容。";
 "import.failure.unsupported" = "已识别该游戏，但它需要当前版本无法安全运行的组件。";
+"import.failure.nativeComponent" = "该游戏包含仅适用于 Windows 的 DLL 或 Node 原生插件，iOS 无法安全加载。";
+"import.failure.invalidEngineArchive" = "已识别游戏归档，但文件头与其扩展名不匹配；文件可能损坏、经过特殊保护或被错误重命名。";
+"import.failure.unreadableEngineArchive" = "已识别游戏归档，但无法读取它进行安全校验；请检查压缩包结构和文件提供器权限。";
+"import.failure.runtimeUnavailable" = "已识别游戏引擎，但此构建没有可用的对应运行时。";
 "import.failure.unreadable" = "无法读取所选文件夹，因此没有导入任何内容。";
 "import.failure.duplicate" = "游戏库中已有完全相同的游戏；现有游戏与存档均未更改。";
 "game.play" = "开始游戏";

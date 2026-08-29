@@ -372,6 +372,10 @@ private extension AppModel.ImportNotice.Failure {
         case .noSupportedGame: "import.failure.noSupportedGame"
         case .ambiguous: "import.failure.ambiguous"
         case .unsupported: "import.failure.unsupported"
+        case .unsupportedNativeComponent: "import.failure.nativeComponent"
+        case .invalidEngineArchive: "import.failure.invalidEngineArchive"
+        case .unreadableEngineArchive: "import.failure.unreadableEngineArchive"
+        case .runtimeUnavailable: "import.failure.runtimeUnavailable"
         case .duplicate: "import.failure.duplicate"
         case .unreadable: "import.failure.unreadable"
         }

@@ -33,6 +33,10 @@ final class AppModel {
             case noSupportedGame
             case ambiguous
             case unsupported
+            case unsupportedNativeComponent
+            case invalidEngineArchive
+            case unreadableEngineArchive
+            case runtimeUnavailable
             case duplicate
             case unreadable
         }
@@ -260,8 +264,19 @@ final class AppModel {
                     failure = .noSupportedGame
                 case .ambiguousDetection:
                     failure = .ambiguous
-                case .unsupportedGame:
-                    failure = .unsupported
+                case let .unsupportedGame(report):
+                    let detailCodes = Set(report.issues.map(\.detailCode))
+                    if detailCodes.contains("compatibility.nativeComponent") {
+                        failure = .unsupportedNativeComponent
+                    } else if detailCodes.contains("detection.magicMismatch") {
+                        failure = .invalidEngineArchive
+                    } else if detailCodes.contains("detection.magicUnreadable") {
+                        failure = .unreadableEngineArchive
+                    } else if detailCodes.contains("compatibility.runtimeUnavailable") {
+                        failure = .runtimeUnavailable
+                    } else {
+                        failure = .unsupported
+                    }
                 case .duplicateGame:
                     failure = .duplicate
                 }
