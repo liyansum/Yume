@@ -40,6 +40,9 @@
 #include "combase.h"
 
 #include "spdlog/spdlog.h"
+#include "SysInitImpl.h"
+
+#include <cstdlib>
 
 #if defined(_WIN32)
 #undef GetClassName
@@ -50,6 +53,7 @@
 
 #if defined(__APPLE__)
 #include <CoreFoundation/CoreFoundation.h>
+#include <TargetConditionals.h>
 #endif
 
 #ifdef WIN32
@@ -366,6 +370,104 @@ const tTVPIOSApplicationHomePaths &TVPGetIOSApplicationHomePaths() {
     }
     return cache;
 }
+
+static std::string TVPRestoreIOSPathCase(std::string posixPath) {
+    while(posixPath.size() > 1 && posixPath.back() == '/')
+        posixPath.pop_back();
+    if(posixPath.empty())
+        return posixPath;
+    if(posixPath.front() != '/')
+        posixPath.insert(posixPath.begin(), '/');
+
+    struct stat existing {};
+    if(stat(posixPath.c_str(), &existing) == 0)
+        return posixPath;
+
+    std::vector<std::string> roots;
+    auto addRoot = [&](std::string root) {
+        while(root.size() > 1 && root.back() == '/')
+            root.pop_back();
+        if(root.empty())
+            return;
+        for(const auto &known : roots) {
+            if(_utf8_strcasecmp(known.c_str(), root.c_str()) == 0)
+                return;
+        }
+        roots.push_back(std::move(root));
+    };
+    if(!TVPNativeProjectDir.IsEmpty())
+        addRoot(TVPNativeProjectDir.AsStdString());
+    for(const auto &home : TVPGetIOSApplicationHomePaths().sourcePaths)
+        addRoot(home);
+    if(const char *home = std::getenv("HOME"); home && home[0] != '\0')
+        addRoot(home);
+
+    std::sort(roots.begin(), roots.end(),
+              [](const std::string &left, const std::string &right) {
+                  return left.size() > right.size();
+              });
+
+    std::string restored;
+    std::string remainder;
+    for(const auto &root : roots) {
+        if(posixPath.size() < root.size())
+            continue;
+        const std::string head = posixPath.substr(0, root.size());
+        if(_utf8_strcasecmp(head.c_str(), root.c_str()) != 0)
+            continue;
+        if(posixPath.size() > root.size() && posixPath[root.size()] != '/')
+            continue;
+        restored = root;
+        remainder = posixPath.size() == root.size()
+                        ? std::string()
+                        : posixPath.substr(root.size());
+        break;
+    }
+    if(restored.empty()) {
+        spdlog::warn("iOS path case restore: no prefix for {}", posixPath);
+        return posixPath;
+    }
+
+    size_t index = 0;
+    while(index < remainder.size()) {
+        while(index < remainder.size() && remainder[index] == '/')
+            ++index;
+        if(index >= remainder.size())
+            break;
+        size_t end = index;
+        while(end < remainder.size() && remainder[end] != '/')
+            ++end;
+        const std::string component = remainder.substr(index, end - index);
+        index = end;
+        DIR *dirp = opendir(restored.c_str());
+        if(!dirp) {
+            restored.push_back('/');
+            restored += component;
+            if(index < remainder.size())
+                restored += remainder.substr(index);
+            break;
+        }
+        bool found = false;
+        while(auto *entry = readdir(dirp)) {
+            if(_utf8_strcasecmp(entry->d_name, component.c_str()) == 0) {
+                restored.push_back('/');
+                restored += entry->d_name;
+                found = true;
+                break;
+            }
+        }
+        closedir(dirp);
+        if(!found) {
+            restored.push_back('/');
+            restored += component;
+            if(index < remainder.size())
+                restored += remainder.substr(index);
+            break;
+        }
+    }
+    spdlog::info("iOS path case restore: {} -> {}", posixPath, restored);
+    return restored;
+}
 #endif // TARGET_OS_IPHONE
 
 //---------------------------------------------------------------------------
@@ -428,10 +530,17 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
         } else {
             name = TJS_W("/");
         }
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        name = ttstr(TVPRestoreIOSPathCase(name.AsStdString()).c_str());
+#endif
         return;
     }
     if(*ptr == TJS_W('/')) {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        name = ttstr(TVPRestoreIOSPathCase(ttstr(ptr).AsStdString()).c_str());
+#else
         name = ttstr(ptr);
+#endif
         return;
     }
 #endif
@@ -1734,7 +1843,21 @@ void TVPAutoMountSiblingXP3Archives() {
     DIR *dirp = opendir(parentPath.c_str());
     if(!dirp) {
         spdlog::error("AutoMountXP3: opendir failed for: {}, errno={}", parentPath, errno);
-        return;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+        if(!TVPNativeProjectDir.IsEmpty()) {
+            std::string native = TVPNativeProjectDir.AsStdString();
+            while(native.size() > 1 &&
+                  (native.back() == '/' || native.back() == '\\')) {
+                native.pop_back();
+            }
+            spdlog::info("AutoMountXP3: retry native project dir {}", native);
+            dirp = opendir(native.c_str());
+            if(dirp)
+                parentPath = native;
+        }
+#endif
+        if(!dirp)
+            return;
     }
 
     struct dirent *dp;

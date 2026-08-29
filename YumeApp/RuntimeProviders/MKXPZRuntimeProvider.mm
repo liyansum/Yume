@@ -342,10 +342,6 @@ static void MKXPInfo(const char *message, void *context) {
     BOOL _sdlStarted;
 }
 
-+ (Class)layerClass {
-    return [CAMetalLayer class];
-}
-
 - (instancetype)initWithSession:(MKXPSession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
@@ -359,19 +355,23 @@ static void MKXPInfo(const char *message, void *context) {
 
 - (void)syncHostMetalLayer {
     CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-    CAMetalLayer *metal = (CAMetalLayer *)self.layer;
-    metal.contentsScale = scale;
-    metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    metal.framebufferOnly = YES;
-    CGRect bounds = metal.bounds;
-    metal.drawableSize = CGSizeMake(std::max(1.0, bounds.size.width * scale),
-                                    std::max(1.0, bounds.size.height * scale));
-    for (CALayer *sublayer in metal.sublayers) {
+    CALayer *parent = self.layer;
+    parent.contentsScale = scale;
+    CGRect bounds = parent.bounds;
+    CGSize drawable = CGSizeMake(std::max(1.0, bounds.size.width * scale),
+                                 std::max(1.0, bounds.size.height * scale));
+    if ([parent isKindOfClass:[CAMetalLayer class]]) {
+        CAMetalLayer *metal = (CAMetalLayer *)parent;
+        metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        metal.framebufferOnly = YES;
+        metal.drawableSize = drawable;
+    }
+    for (CALayer *sublayer in parent.sublayers) {
         if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
             CAMetalLayer *child = (CAMetalLayer *)sublayer;
             child.frame = bounds;
             child.contentsScale = scale;
-            child.drawableSize = metal.drawableSize;
+            child.drawableSize = drawable;
         }
     }
 }

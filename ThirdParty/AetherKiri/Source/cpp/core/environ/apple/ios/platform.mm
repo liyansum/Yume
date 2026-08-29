@@ -364,8 +364,8 @@ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
         // user's eventual tap asynchronously.
         spdlog::info(
             "TVPShowSimpleMessageBox: main-thread dialog is asynchronous; "
-            "returning fallback action {}", fallbackIndex);
-        return fallbackIndex;
+            "returning fallback action {}", 0);
+        return 0;
     } else {
         // Startup runs on the engine worker. Present asynchronously on UIKit's
         // main queue and block only that worker until the native action fires.

@@ -3,6 +3,7 @@
 
 #import <UIKit/UIKit.h>
 #import <Metal/Metal.h>
+#include <cstdio>
 #include <SDL_syswm.h>
 #include "app_bridge.h"
 
@@ -58,6 +59,11 @@ extern "C" void mkxp_demoteSDLWindow(void *sdlWindow) {
         UIWindow *host = (__bridge UIWindow *)hostPointer;
         [host makeKeyAndVisible];
     }
+    char line[96];
+    std::snprintf(line, sizeof(line), "demote sdl hidden=%d appWindows=%lu",
+                  sdlWindowUI.hidden ? 1 : 0,
+                  (unsigned long)UIApplication.sharedApplication.windows.count);
+    mkxp_debugLog("INFO", "sdl-window", line);
 }
 
 // Sync the CAMetalLayer (and its parent CALayer's contentsScale) to

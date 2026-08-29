@@ -278,23 +278,25 @@ static UIWindow *FindSDLUIKitWindow(void) {
         }
         SDL_SetMainReady();
         std::string executableArgument = executable;
-        std::string baseDirectoryOption = "--basedir";
         std::string gameRoot = session->contentRoot;
         AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
         AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
-        // Official launcher_main does take_argv0(argv[0]) then strcat(".py")
-        // and looks for dirname(argv[0]) + "/base/" + basename + ".py",
-        // falling back to dirname(argv[0]) + "/base/main.py". argv[0] must
-        // be the runtime generation directory plus a name WITHOUT .py.
+        std::fprintf(stdout, "yume.python-redirect-ready argv0=%s basedir=%s\n",
+                     executableArgument.c_str(), gameRoot.c_str());
+        std::fflush(stdout);
+        std::fflush(stderr);
+        // Official launcher_main preinitializes isolated Python from this
+        // argv. A "--basedir" flag is treated as an unknown interpreter
+        // option and exits 1 with no traceback. Ren'Py accepts the game
+        // root as a positional basedir after it injects main.py.
         char *arguments[] = {
             executableArgument.data(),
-            baseDirectoryOption.data(),
             gameRoot.data(),
             nullptr
         };
         int result = session->generation == RenPyGeneration::Modern
-            ? yume_renpy_modern_main(3, arguments)
-            : yume_renpy_legacy_main(3, arguments);
+            ? yume_renpy_modern_main(2, arguments)
+            : yume_renpy_legacy_main(2, arguments);
         std::string resultLine = "engine.main-returned result=" + std::to_string(result);
         AppendRenPyHostLog(session, resultLine.c_str());
         session->mainReturned.store(true);
