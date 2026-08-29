@@ -1,4 +1,6 @@
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 
 #include <atomic>
@@ -16,6 +18,7 @@ extern "C" int SDL_main(int argc, char *argv[]);
 extern "C" void SDL_SetMainReady(void);
 
 enum class MKXPRubyGeneration { Ruby18, Ruby19, Ruby31 };
+enum class MKXPRGSSGeneration { XP, VX, VXAce };
 
 struct MKXPSession;
 
@@ -32,7 +35,8 @@ struct MKXPSession {
     std::string derivedRoot;
     std::string logRoot;
     std::vector<std::string> rtpRoots;
-    MKXPRubyGeneration ruby = MKXPRubyGeneration::Ruby31;
+    MKXPRGSSGeneration rgss = MKXPRGSSGeneration::XP;
+    MKXPRubyGeneration ruby = MKXPRubyGeneration::Ruby18;
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
     std::mutex callbackMutex;
@@ -92,18 +96,8 @@ static void MKXPEmit(MKXPSession *session, YumeRuntimeEventKind kind,
     if (callback != nullptr) callback(kind, code != nullptr ? code : "", context);
 }
 
-static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
+static MKXPRGSSGeneration DetectRGSSGeneration(NSString *root) {
     NSFileManager *files = NSFileManager.defaultManager;
-    NSArray<NSString *> *modernRuntimeMarkers = @[
-        @"ruby300.dll", @"ruby310.dll", @"x64-msvcrt-ruby300.dll",
-        @"x64-msvcrt-ruby310.dll"
-    ];
-    for (NSString *marker in modernRuntimeMarkers) {
-        if ([files fileExistsAtPath:[root stringByAppendingPathComponent:marker]]) {
-            return MKXPRubyGeneration::Ruby31;
-        }
-    }
-
     for (NSString *iniName in @[@"Game.ini", @"game.ini"]) {
         NSString *iniPath = [root stringByAppendingPathComponent:iniName];
         NSString *ini = [NSString stringWithContentsOfFile:iniPath
@@ -115,13 +109,19 @@ static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
                                               error:nil];
         }
         NSString *lower = ini.lowercaseString;
+        // Longer RGSS3 tokens first so "RGSS301.dll" is not read as RGSS1.
         if ([lower containsString:@"rgss3"] || [lower containsString:@"rgss300"] ||
             [lower containsString:@"rgss301"]) {
-            return MKXPRubyGeneration::Ruby19;
+            return MKXPRGSSGeneration::VXAce;
         }
         if ([lower containsString:@"rgss2"] || [lower containsString:@"rgss200"] ||
             [lower containsString:@"rgss202"]) {
-            return MKXPRubyGeneration::Ruby18;
+            return MKXPRGSSGeneration::VX;
+        }
+        if ([lower containsString:@"rgss1"] || [lower containsString:@"rgss100"] ||
+            [lower containsString:@"rgss101"] || [lower containsString:@"rgss102"] ||
+            [lower containsString:@"rgss103"]) {
+            return MKXPRGSSGeneration::XP;
         }
     }
 
@@ -130,8 +130,9 @@ static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
                                     includingPropertiesForKeys:@[NSURLIsRegularFileKey]
                                                        options:NSDirectoryEnumerationSkipsHiddenFiles
                                                   errorHandler:nil];
+    NSInteger foundXP = 0;
+    NSInteger foundVX = 0;
     NSInteger foundVXAce = 0;
-    NSInteger foundClassic = 0;
     const NSUInteger rootDepth = rootURL.pathComponents.count;
     for (NSURL *file in enumerator) {
         NSUInteger depth = file.pathComponents.count - rootDepth;
@@ -143,18 +144,44 @@ static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
         NSString *ext = file.pathExtension.lowercaseString;
         if ([ext isEqualToString:@"rgss3a"] || [name isEqualToString:@"scripts.rvdata2"]) {
             foundVXAce += 1;
-        } else if ([ext isEqualToString:@"rgss2a"] || [ext isEqualToString:@"rgssad"] ||
-                   [name isEqualToString:@"scripts.rvdata"] ||
-                   [name isEqualToString:@"scripts.rxdata"]) {
-            foundClassic += 1;
+        } else if ([ext isEqualToString:@"rgss2a"] || [name isEqualToString:@"scripts.rvdata"]) {
+            foundVX += 1;
+        } else if ([ext isEqualToString:@"rgssad"] || [name isEqualToString:@"scripts.rxdata"]) {
+            foundXP += 1;
         }
-        if (foundVXAce > 0 && foundClassic > 0) break;
     }
-    if (foundVXAce > 0) return MKXPRubyGeneration::Ruby19;
-    return MKXPRubyGeneration::Ruby18;
+    if (foundVXAce > 0) return MKXPRGSSGeneration::VXAce;
+    if (foundVX > 0) return MKXPRGSSGeneration::VX;
+    return MKXPRGSSGeneration::XP;
 }
 
-static NSString *ConfigOverlayJSON(const std::vector<std::string> &rtpRoots) {
+static MKXPRubyGeneration RubyGenerationForRGSS(MKXPRGSSGeneration rgss) {
+    switch (rgss) {
+        case MKXPRGSSGeneration::VXAce: return MKXPRubyGeneration::Ruby19;
+        case MKXPRGSSGeneration::XP:
+        case MKXPRGSSGeneration::VX:
+            return MKXPRubyGeneration::Ruby18;
+    }
+}
+
+static int RGSSVersionNumber(MKXPRGSSGeneration rgss) {
+    switch (rgss) {
+        case MKXPRGSSGeneration::XP: return 1;
+        case MKXPRGSSGeneration::VX: return 2;
+        case MKXPRGSSGeneration::VXAce: return 3;
+    }
+}
+
+static const char *RGSSGenerationLabel(MKXPRGSSGeneration rgss) {
+    switch (rgss) {
+        case MKXPRGSSGeneration::XP: return "RGSS1/XP";
+        case MKXPRGSSGeneration::VX: return "RGSS2/VX";
+        case MKXPRGSSGeneration::VXAce: return "RGSS3/VX Ace";
+    }
+}
+
+static NSString *ConfigOverlayJSON(const std::vector<std::string> &rtpRoots,
+                                   MKXPRGSSGeneration rgss) {
     NSMutableArray<NSString *> *paths = [NSMutableArray arrayWithCapacity:rtpRoots.size()];
     for (const std::string &path : rtpRoots) {
         NSString *value = [NSString stringWithUTF8String:path.c_str()];
@@ -162,8 +189,11 @@ static NSString *ConfigOverlayJSON(const std::vector<std::string> &rtpRoots) {
     }
     NSDictionary *object = @{
         @"RTP": paths,
+        @"rgssVersion": @(RGSSVersionNumber(rgss)),
         @"fixedAspectRatio": @YES,
-        @"enableHapticFeedback": @NO
+        @"enableHapticFeedback": @NO,
+        @"JITEnable": @NO,
+        @"YJITEnable": @NO
     };
     NSData *data = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
     return data != nil ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"{}";
@@ -201,7 +231,7 @@ static void ConfigureMKXP(MKXPSession *session) {
     }
     mkxp_applySessionConfig(&config);
     mkxp_setLauncherIdentity("yume");
-    NSString *overlay = ConfigOverlayJSON(session->rtpRoots);
+    NSString *overlay = ConfigOverlayJSON(session->rtpRoots, session->rgss);
     mkxp_setConfigOverlayJSON(overlay.UTF8String);
     if (!session->logRoot.empty()) {
         NSString *logRoot = [NSString stringWithUTF8String:session->logRoot.c_str()];
@@ -283,21 +313,66 @@ static void MKXPInfo(const char *message, void *context) {
     if ([self embedIfAvailable]) link.paused = YES;
 }
 
-- (BOOL)embedIfAvailable {
-    if (_embeddedGameView != nil) return YES;
-    void *windowPointer = mkxp_getSDLUIKitWindow();
-    if (windowPointer == nullptr) return NO;
-    UIWindow *window = (__bridge UIWindow *)windowPointer;
-    UIView *gameView = window.rootViewController.view;
-    if (gameView == nil) return NO;
+- (void)adoptSDLView:(UIView *)gameView fromWindow:(UIWindow *)window {
+    if (gameView == nil || window == nil) return;
     [gameView removeFromSuperview];
     gameView.frame = self.bounds;
     gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                 UIViewAutoresizingFlexibleHeight;
     [self insertSubview:gameView atIndex:0];
-    window.hidden = YES;
+    // LiveContainer only composites the guest app's original UIWindow.
+    // Hiding SDL's extra window (or leaving it key) blacks out Metal.
+    // Keep the SDL window alive for ANGLE, but hand key status back.
+    window.userInteractionEnabled = NO;
+    window.windowLevel = UIWindowLevelNormal - 1;
+    window.alpha = 0;
+    window.hidden = NO;
+    UIWindow *hostWindow = self.window;
+    if (hostWindow != nil) [hostWindow makeKeyAndVisible];
+    CGFloat scale = hostWindow.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
+    gameView.layer.contentsScale = scale;
+    CGRect bounds = gameView.layer.bounds;
+    for (CALayer *sublayer in gameView.layer.sublayers) {
+        if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
+            CAMetalLayer *metal = (CAMetalLayer *)sublayer;
+            metal.frame = bounds;
+            metal.contentsScale = scale;
+            metal.drawableSize = CGSizeMake(bounds.size.width * scale,
+                                            bounds.size.height * scale);
+        }
+    }
     _embeddedGameView = gameView;
     _sdlWindow = window;
+}
+
+- (UIView *)sdlGameViewInWindow:(UIWindow *)window {
+    UIView *root = window.rootViewController.view ?: window;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+    while (stack.count > 0) {
+        UIView *candidate = stack.firstObject;
+        [stack removeObjectAtIndex:0];
+        NSString *name = NSStringFromClass(candidate.class);
+        if ([name.lowercaseString containsString:@"sdl"] &&
+            [name.lowercaseString containsString:@"view"]) {
+            return candidate;
+        }
+        [stack addObjectsFromArray:candidate.subviews];
+    }
+    return window.rootViewController.view;
+}
+
+- (BOOL)embedIfAvailable {
+    if (_embeddedGameView != nil) return YES;
+    void *windowPointer = mkxp_getSDLUIKitWindow();
+    if (windowPointer == nullptr) return NO;
+    UIWindow *window = (__bridge UIWindow *)windowPointer;
+    UIView *gameView = [self sdlGameViewInWindow:window];
+    if (gameView == nil) return NO;
+    if (window == self.window && gameView == window.rootViewController.view) {
+        AppendMKXPHostLog(_session, "view.embed-skip-host-window");
+        return YES;
+    }
+    [self adoptSDLView:gameView fromWindow:window];
     AppendMKXPHostLog(_session, "view.embedded");
     return YES;
 }
@@ -305,6 +380,21 @@ static void MKXPInfo(const char *message, void *context) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     _embeddedGameView.frame = self.bounds;
+    UIView *gameView = _embeddedGameView;
+    if (gameView != nil) {
+        CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
+        gameView.layer.contentsScale = scale;
+        CGRect bounds = gameView.layer.bounds;
+        for (CALayer *sublayer in gameView.layer.sublayers) {
+            if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
+                CAMetalLayer *metal = (CAMetalLayer *)sublayer;
+                metal.frame = bounds;
+                metal.contentsScale = scale;
+                metal.drawableSize = CGSizeMake(bounds.size.width * scale,
+                                                bounds.size.height * scale);
+            }
+        }
+    }
     UIEdgeInsets safe = self.safeAreaInsets;
     mkxp_setSafeAreaInsets(safe.top, safe.bottom, safe.left, safe.right);
 }
@@ -322,6 +412,8 @@ static void MKXPInfo(const char *message, void *context) {
     gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                 UIViewAutoresizingFlexibleHeight;
     [window addSubview:gameView];
+    window.alpha = 1;
+    window.userInteractionEnabled = YES;
     window.hidden = NO;
 }
 
@@ -364,13 +456,16 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
     session->callback = callback;
     session->callbackContext = context;
     NSString *root = [NSString stringWithUTF8String:session->contentRoot.c_str()];
-    session->ruby = DetectRubyGeneration(root);
+    session->rgss = DetectRGSSGeneration(root);
+    session->ruby = RubyGenerationForRGSS(session->rgss);
     AppendMKXPHostLog(session, "session.created");
-    AppendMKXPHostLog(session, session->ruby == MKXPRubyGeneration::Ruby19
-        ? "ruby.detected=1.9 (RGSS3/VX Ace)"
-        : session->ruby == MKXPRubyGeneration::Ruby18
-            ? "ruby.detected=1.8 (RGSS1/2)"
-            : "ruby.detected=3.1");
+    std::string generation = "rgss.generation=";
+    generation += RGSSGenerationLabel(session->rgss);
+    generation += session->ruby == MKXPRubyGeneration::Ruby19
+        ? " ruby=1.9"
+        : " ruby=1.8";
+    AppendMKXPHostLog(session, generation.c_str());
+    MKXPEmit(session, YUME_RUNTIME_EVENT_WARNING, generation.c_str());
     std::string rtpCount = "rtp.mount-count=" + std::to_string(session->rtpRoots.size());
     AppendMKXPHostLog(session, rtpCount.c_str());
     for (const auto &rtpRoot : session->rtpRoots) {
@@ -409,17 +504,14 @@ static int32_t MKXPStart(void *opaque) {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         AppendMKXPHostLog(session, "engine.main-enter");
-        // mkxp-z's iOS host is designed to enter SDL_main before a game path
-        // is supplied. Its wait loop pumps CFRunLoop, which gives SwiftUI,
-        // lifecycle logging and the embedding view a chance to attach before
-        // SDL takes over the main thread. Setting the path before SDL_main
-        // let the queued SDL block starve those tasks and produced a permanent
-        // black host view with no App-level runtime events.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            AppendMKXPHostLog(session, "engine.game-path-set.begin");
-            mkxp_setGamePath(session->contentRoot.c_str());
-            AppendMKXPHostLog(session, "engine.game-path-set.end");
-        });
+        // LiveContainer's guest run loop does not always drain a nested
+        // dispatch_async while mkxp_waitForGamePath pumps CFRunLoop, so the
+        // previous deferred setGamePath never fired and the player stayed
+        // black. The host view is already attached by GamePlayerView before
+        // this block runs; set the path first, then enter SDL_main.
+        AppendMKXPHostLog(session, "engine.game-path-set.begin");
+        mkxp_setGamePath(session->contentRoot.c_str());
+        AppendMKXPHostLog(session, "engine.game-path-set.end");
         SDL_SetMainReady();
         AppendMKXPHostLog(session, "engine.sdl-main.begin");
         char executable[] = "yume-mkxp-z";

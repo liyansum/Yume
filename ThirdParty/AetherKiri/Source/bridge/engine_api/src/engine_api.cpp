@@ -1910,7 +1910,7 @@ engine_result_t OpenGameCore(engine_handle_t handle,
     // and activation callbacks were still retained by script-side cycles.
     // Start every embedded session from a process-neutral application state.
     Application->ResetForHostSession();
-    spdlog::debug("engine_open_game: calling Application->StartApplication...");
+    spdlog::info("engine_open_game: calling Application->StartApplication...");
 #if defined(__ANDROID__)
     AndroidInfoLog("engine_open_game: calling StartApplication('%s')",
                    normalized_game_root_path.c_str());

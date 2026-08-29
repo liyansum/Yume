@@ -231,6 +231,20 @@ final class LocalGameStorageTests: XCTestCase {
 
         XCTAssertEqual(xpMounts.map(\.lastPathComponent), ["rgss-xp"])
         XCTAssertEqual(aceMounts.map(\.lastPathComponent), ["rgss-vx-ace"])
+
+        let vxSource = fixture.container.appendingPathComponent("RTP VX", isDirectory: true)
+        try writeRTPFixture(at: vxSource, sentinel: "vx")
+        _ = try await storage.importRPGMakerRTP(variant: .vx, from: vxSource)
+        let vxGame = try writeRGSSGame(
+            in: storage,
+            scriptsPath: "Data/Scripts.rvdata"
+        )
+        let vxMounts = try await storage.rtpMountRoots(for: vxGame)
+        let xpMountsAfterVX = try await storage.rtpMountRoots(for: xpGame)
+        let aceMountsAfterVX = try await storage.rtpMountRoots(for: aceGame)
+        XCTAssertEqual(vxMounts.map(\.lastPathComponent), ["rgss-vx"])
+        XCTAssertEqual(xpMountsAfterVX.map(\.lastPathComponent), ["rgss-xp"])
+        XCTAssertEqual(aceMountsAfterVX.map(\.lastPathComponent), ["rgss-vx-ace"])
     }
 
     func testRPGMakerRTPImportAcceptsEachStandardAssetDirectoryAndInstallerWrappers() async throws {

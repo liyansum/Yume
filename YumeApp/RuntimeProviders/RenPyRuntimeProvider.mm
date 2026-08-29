@@ -1,11 +1,14 @@
 #import <Foundation/Foundation.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <fcntl.h>
 #include <mutex>
 #include <new>
+#include <signal.h>
 #include <string>
 #include <unistd.h>
 
@@ -71,6 +74,75 @@ static void AppendRenPyHostLog(RenPySession *session, const char *message) {
 
 static std::mutex gRenPyClaimMutex;
 static bool gRenPyClaimed = false;
+static volatile sig_atomic_t gRenPyCrashLogFD = -1;
+
+static void RenPyCrashSignalHandler(int signalNumber) {
+    const int fd = static_cast<int>(gRenPyCrashLogFD);
+    if (fd < 0) return;
+    static const char prefix[] = "native.crash signal=";
+    (void)write(fd, prefix, sizeof(prefix) - 1);
+    char number[16] = {};
+    unsigned int value = signalNumber < 0
+        ? static_cast<unsigned int>(-signalNumber)
+        : static_cast<unsigned int>(signalNumber);
+    int index = static_cast<int>(sizeof(number)) - 2;
+    do {
+        number[index--] = static_cast<char>('0' + value % 10u);
+        value /= 10u;
+    } while (value > 0 && index >= 0);
+    if (signalNumber < 0 && index >= 0) number[index--] = '-';
+    (void)write(fd, number + index + 1, sizeof(number) - index - 2);
+    (void)write(fd, "\n", 1);
+    (void)fsync(fd);
+}
+
+static void InstallRenPyCrashBreadcrumb(RenPySession *session) {
+    if (session == nullptr || session->logRoot.empty()) return;
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
+        if (root.length == 0) return;
+        [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *path = [root stringByAppendingPathComponent:@"renpy-crash.log"];
+        const int fd = open(path.fileSystemRepresentation,
+                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+        if (fd < 0) return;
+        const int previous = static_cast<int>(gRenPyCrashLogFD);
+        gRenPyCrashLogFD = fd;
+        if (previous >= 0) close(previous);
+        const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
+        for (const int signalNumber : signals) {
+            struct sigaction action {};
+            action.sa_handler = RenPyCrashSignalHandler;
+            sigemptyset(&action.sa_mask);
+            action.sa_flags = SA_RESETHAND;
+            (void)sigaction(signalNumber, &action, nullptr);
+        }
+    }
+    AppendRenPyHostLog(session, "crash-handler.install.end");
+}
+
+static void RedirectRenPyOutput(RenPySession *session) {
+    if (session == nullptr || session->logRoot.empty()) return;
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
+        if (root.length == 0) return;
+        [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *path = [root stringByAppendingPathComponent:@"renpy-python.log"];
+        FILE *stream = fopen(path.fileSystemRepresentation, "ab");
+        if (stream == nullptr) return;
+        const int fd = fileno(stream);
+        (void)dup2(fd, STDOUT_FILENO);
+        (void)dup2(fd, STDERR_FILENO);
+        setvbuf(stdout, nullptr, _IONBF, 0);
+        setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+}
 
 static void ReleaseRenPyClaim(void) {
     std::lock_guard<std::mutex> lock(gRenPyClaimMutex);
@@ -184,12 +256,22 @@ static UIWindow *FindSDLUIKitWindow(void) {
     if (window == nil) return;
     UIView *gameView = window.rootViewController.view;
     if (gameView == nil) return;
+    if (window == self.window && gameView == window.rootViewController.view) {
+        AppendRenPyHostLog(_session, "view.embed-skip-host-window");
+        link.paused = YES;
+        RenPyEmit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "renpy.first-frame");
+        return;
+    }
     [gameView removeFromSuperview];
     gameView.frame = self.bounds;
     gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                 UIViewAutoresizingFlexibleHeight;
     [self insertSubview:gameView atIndex:0];
-    window.hidden = YES;
+    window.userInteractionEnabled = NO;
+    window.windowLevel = UIWindowLevelNormal - 1;
+    window.alpha = 0;
+    window.hidden = NO;
+    if (self.window != nil) [self.window makeKeyAndVisible];
     _embeddedGameView = gameView;
     _sdlWindow = window;
     link.paused = YES;
@@ -213,6 +295,8 @@ static UIWindow *FindSDLUIKitWindow(void) {
         [gameView removeFromSuperview];
         gameView.frame = window.bounds;
         [window addSubview:gameView];
+        window.alpha = 1;
+        window.userInteractionEnabled = YES;
         window.hidden = NO;
     }
     _session = nullptr;
@@ -265,7 +349,6 @@ static int32_t RenPyStart(void *opaque) {
     NSURL *runtimeRoot = [[NSBundle mainBundle].resourceURL
         URLByAppendingPathComponent:@"Runtimes" isDirectory:YES];
     runtimeRoot = [runtimeRoot URLByAppendingPathComponent:generation isDirectory:YES];
-    NSString *launcher = [[runtimeRoot URLByAppendingPathComponent:@"yume-renpy"] path];
     NSString *base = [[runtimeRoot URLByAppendingPathComponent:@"base" isDirectory:YES] path];
     if (![[NSFileManager defaultManager]
             fileExistsAtPath:[base stringByAppendingPathComponent:@"main.py"]]) {
@@ -279,6 +362,8 @@ static int32_t RenPyStart(void *opaque) {
     setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
     setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
     setenv("RENPY_LOG_TO_STDOUT", "1", 1);
+    InstallRenPyCrashBreadcrumb(session);
+    RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
     [session->view beginEmbedding];
@@ -286,9 +371,14 @@ static int32_t RenPyStart(void *opaque) {
               session->generation == RenPyGeneration::Modern
                   ? "renpy.modern-started" : "renpy.legacy-started");
 
-    std::string executable = launcher.UTF8String;
+    // Point argv[0] at the real main.py so launcher_main/path_to_renpy_base
+    // resolve the bundled runtime, not a missing yume-renpy placeholder.
+    std::string executable = [base stringByAppendingPathComponent:@"main.py"].UTF8String;
     dispatch_async(dispatch_get_main_queue(), ^{
         AppendRenPyHostLog(session, "engine.sdl-main.begin");
+        if (!session->contentRoot.empty()) {
+            (void)chdir(session->contentRoot.c_str());
+        }
         SDL_SetMainReady();
         std::string executableArgument = executable;
         std::string baseDirectoryOption = "--basedir";
@@ -296,6 +386,7 @@ static int32_t RenPyStart(void *opaque) {
         // Bundled Python lives next to argv[0] / main.py via path_to_renpy_base().
         std::string gameRoot = session->contentRoot;
         AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
+        AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
         char *arguments[] = {
             executableArgument.data(),
             baseDirectoryOption.data(),

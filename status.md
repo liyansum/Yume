@@ -1,17 +1,18 @@
 # Yume 当前任务状态
 
-> 当前任务：修复 XP3 线程闪退、VX Ace 错用 Ruby 1.8、RTP 多世代 ZIP 导入
-> 状态：代码已完成，待推送并编译 IPA
+> 当前任务：修复 Ren'Py / Kirikiri 闪退、RPG Maker 黑屏，并按 XP/VX/VX Ace 三代选择运行时
+> 状态：代码已完成，待验证并编译 IPA
 > 最后更新：2026-08-29
 
 ## 根因
 
-- Kirikiri：`dispatch_sync` 在主线程创建引擎，DisplayLink 却在后台队列取帧，触发 “engine handle must be used on the thread where engine_create was called”。
-- VX Ace：只扫顶层文件，把带包装目录的 `Game.rgss3a` 当成 RGSS1/2；RTP 未导入时 `rtp.mount-count=0` 后 abort。
-- RTP：只精确匹配文件夹名 XP/VX/VXAce，整包多个 `app` 被当成歧义；已导入其中一代会让整包失败。
+- Kirikiri：`engine_open_game_async` 在内部线程跑 TVP，DisplayLink 却在创建线程取帧；LiveContainer 下 `Application Support` 路径再经 `file://./` 目录遍历会损坏。
+- RPG Maker：SDL 窗口被 `hidden=YES` 后 ANGLE/Metal 无法呈现；LiveContainer 里嵌套 `dispatch_async` 可能永远不执行 `mkxp_setGamePath`。XP/VX/VX Ace 只分了 Ruby 1.8/1.9，未把 `rgssVersion` 写入 mkxp 配置，VX 可能被当成 XP。
+- Ren'Py：同样藏起 SDL 窗口；argv[0] 指向不存在的 `yume-renpy`。
 
 ## 修复
 
-- Kirikiri 所有 engine_* 回到创建线程（主线程）；存档写到游戏 saves 目录。
-- Ruby 代际根据 Game.ini / 递归 rgss3a、rvdata2 判断。
-- RTP 按父目录名识别多个世代，优先 `app`，跳过 `sys`，已导入的世代跳过而不是整包失败。
+- Kirikiri：专用引擎线程上同步 `engine_open_game`；iOS 存储名走直接 POSIX 路径。
+- RPG Maker：不隐藏 SDL 窗口、交还 key window；启动前设置 game path；按 Game.ini / Scripts 扩展名选择 RGSS1/2/3 与对应 Ruby 和 RTP。
+- Ren'Py：同样的窗口策略；argv[0] 指向真实 `main.py`；Python 输出与崩溃面包屑写入日志。
+- MV/MZ/Flash/Tyrano：WKWebView 允许内联媒体播放。

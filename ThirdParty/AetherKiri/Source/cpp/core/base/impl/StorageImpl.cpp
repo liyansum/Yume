@@ -411,10 +411,12 @@ void tTVPFileMedia::GetLocallyAccessibleName(ttstr &name) {
     //     pp++;
     // }
 #else // posix
-#if defined(__ANDROID__)
-    // Android sandbox frequently denies directory probing from "/" and we
-    // don't need case-insensitive recovery there. Fast-path absolute storage
-    // names to a direct POSIX path.
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    // Android and iOS sandboxes deny or hang directory probing from "/".
+    // LiveContainer also nests the real home under Documents/, so walking
+    // case-insensitive names from the outer HOME prefix corrupts paths
+    // that contain spaces ("Application Support"). Fast-path absolute
+    // storage names to a direct POSIX path; APFS is case-insensitive.
     if(!TJS_strncmp(ptr, TJS_W("./"), 2)) {
         ptr += 2; // skip "./"
         if(*ptr) {

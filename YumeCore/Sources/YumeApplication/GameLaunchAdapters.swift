@@ -59,7 +59,7 @@ public enum GameLaunchAdapters {
                 engineID: "rgss",
                 kind: .hostedRuntime(runtimeIdentifier: "mkxp-z"),
                 requiresUserRTP: true,
-                runtimeVersionLabel: "mkxp-z"
+                runtimeVersionLabel: "mkxp-z RGSS1/XP · RGSS2/VX · RGSS3/VX Ace"
             ),
             SimpleLaunchAdapter(
                 engineID: "onscripter",

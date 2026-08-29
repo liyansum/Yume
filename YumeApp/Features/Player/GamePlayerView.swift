@@ -186,6 +186,8 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.isElementFullscreenEnabled = true
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
         let storageBridge = GameLocalStorageBridge(saveRootURL: location.saveRootURL)
         configuration.userContentController.add(storageBridge, name: GameLocalStorageBridge.messageName)
         configuration.userContentController.addUserScript(storageBridge.bootstrapScript())
@@ -224,6 +226,10 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = false
         webView.allowsLinkPreview = false
+        webView.scrollView.isScrollEnabled = false
+        if #available(iOS 16.4, *) {
+            webView.isInspectable = false
+        }
 
         context.coordinator.installNetworkBlockerAndLoad(webView, location: location, mode: mode)
         return webView

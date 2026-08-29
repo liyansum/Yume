@@ -1354,9 +1354,39 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
 
     private func detectedRPGMakerRTPVariant(for game: ImportedGame) throws -> RPGMakerRTPVariant? {
         guard game.engine.id.rawValue == "rgss" else { return nil }
-        let manifest = try loadGameManifest(at: gameRootURL(for: game.id))
-        let paths = manifest.detection.evidence.map {
+        let gameRoot = gameRootURL(for: game.id)
+        let manifest = try loadGameManifest(at: gameRoot)
+        var paths = manifest.detection.evidence.map {
             $0.relativePath.rawValue.lowercased()
+        }
+        let original = gameRoot.appendingPathComponent("original", isDirectory: true)
+        var iniVariant: RPGMakerRTPVariant?
+        if fileManager.fileExists(atPath: original.path) {
+            let enumerator = fileManager.enumerator(
+                at: original,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+            var visited = 0
+            while let url = enumerator?.nextObject() as? URL, visited < 400 {
+                visited += 1
+                paths.append(url.lastPathComponent.lowercased())
+                guard url.lastPathComponent.lowercased() == "game.ini" else { continue }
+                let ini = (try? String(contentsOf: url, encoding: .utf8))
+                    ?? (try? String(contentsOf: url, encoding: .shiftJIS))
+                    ?? ""
+                let lower = ini.lowercased()
+                if lower.contains("rgss3") {
+                    iniVariant = .vxAce
+                } else if lower.contains("rgss2") {
+                    iniVariant = .vx
+                } else if lower.contains("rgss1") {
+                    iniVariant = .xp
+                }
+            }
+        }
+        if let iniVariant {
+            return iniVariant
         }
         if paths.contains(where: {
             $0.hasSuffix("scripts.rvdata2") || $0.hasSuffix(".rgss3a")
