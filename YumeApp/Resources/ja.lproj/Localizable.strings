@@ -78,6 +78,11 @@
 "game.compatibility.title" = "互換性";
 "game.compatibility.engine" = "ランタイム範囲";
 "game.compatibility.status" = "状態";
+"game.renpy.runtime.title" = "Ren'Py ランタイム";
+"game.renpy.runtime.auto" = "自動判定";
+"game.renpy.runtime.legacy" = "Ren'Py 7.x";
+"game.renpy.runtime.modern" = "Ren'Py 8.x";
+"game.renpy.runtime.help" = "自動判定が誤った Python 世代を選ぶ場合は、このゲームだけ 7.x または 8.x を指定できます。設定はこの端末にのみ保存されます。";
 "player.close" = "ゲームを閉じる";
 "player.error.title" = "ゲームを開始できません";
 "player.error.message" = "インストール済みランタイムに、このゲームを実行できるエントリポイントがありません。";

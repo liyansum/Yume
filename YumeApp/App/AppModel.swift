@@ -480,10 +480,15 @@ final class AppModel {
 
     func launch(_ game: ImportedGame) async {
         playbackFailed = false
+        GameRuntimePreferences.applyLaunchEnvironment(for: game)
         await recordAppLog(
             subsystem: "player",
             message: "launch.requested",
-            metadata: ["gameID": game.id.rawValue.uuidString, "engine": game.engine.id.rawValue]
+            metadata: [
+                "gameID": game.id.rawValue.uuidString,
+                "engine": game.engine.id.rawValue,
+                "renpyRuntime": GameRuntimePreferences.renpyBand(for: game.id).rawValue
+            ]
         )
         do {
             let session = try await playSessions.start(gameID: game.id)

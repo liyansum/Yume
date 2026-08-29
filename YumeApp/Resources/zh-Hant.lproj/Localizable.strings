@@ -78,6 +78,11 @@
 "game.compatibility.title" = "相容性";
 "game.compatibility.engine" = "執行階段範圍";
 "game.compatibility.status" = "狀態";
+"game.renpy.runtime.title" = "Ren'Py 執行階段";
+"game.renpy.runtime.auto" = "自動辨識";
+"game.renpy.runtime.legacy" = "Ren'Py 7.x";
+"game.renpy.runtime.modern" = "Ren'Py 8.x";
+"game.renpy.runtime.help" = "若自動辨識啟動了錯誤的 Python 代際，可在此為該遊戲指定 7.x 或 8.x。設定只保存在本機。";
 "player.close" = "退出遊戲";
 "player.error.title" = "無法啟動遊戲";
 "player.error.message" = "已安裝的執行階段無法為此遊戲提供可執行的入口。";

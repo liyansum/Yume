@@ -43,6 +43,7 @@ required_resources=(
     ThirdParty/BundledResources/Ruby/1.8/English.rb
     ThirdParty/BundledResources/Ruby/1.9.1/English.rb
     ThirdParty/BundledResources/Ruby/3.1.0/English.rb
+    Scripts/rebuild_mkxpz_core.sh
 )
 for resource in "${required_resources[@]}"; do
     if [[ ! -s "$resource" ]]; then

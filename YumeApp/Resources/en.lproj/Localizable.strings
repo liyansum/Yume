@@ -78,6 +78,11 @@
 "game.compatibility.title" = "Compatibility";
 "game.compatibility.engine" = "Runtime band";
 "game.compatibility.status" = "Status";
+"game.renpy.runtime.title" = "Ren'Py runtime";
+"game.renpy.runtime.auto" = "Automatic";
+"game.renpy.runtime.legacy" = "Ren'Py 7.x";
+"game.renpy.runtime.modern" = "Ren'Py 8.x";
+"game.renpy.runtime.help" = "Choose 7.x or 8.x if automatic detection starts the wrong Python generation. The setting is saved on this device for this game only.";
 "player.close" = "Close Game";
 "player.error.title" = "Unable to Start Game";
 "player.error.message" = "This game does not have a runnable entry point in the installed runtime.";

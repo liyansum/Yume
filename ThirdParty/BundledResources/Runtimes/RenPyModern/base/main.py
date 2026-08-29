@@ -156,6 +156,9 @@ def path_to_saves(gamedir, save_directory=None): # type: (str, str|None) -> str
         return rv
 
     if renpy.ios:
+        env_saves = os.environ.get("RENPY_PATH_TO_SAVES")
+        if env_saves:
+            return env_saves
         from pyobjus import autoclass # type: ignore
         from pyobjus.objc_py_types import enum # type: ignore
 

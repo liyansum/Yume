@@ -370,26 +370,30 @@ bool tTVPApplication::StartApplication(ttstr path) {
         // for
         // processing object hash map log
 
-        spdlog::debug("StartApplication: normalizing storage path...");
+        spdlog::info("StartApplication: normalizing storage path...");
         spdlog::default_logger()->flush();
         TVPProjectDir = TVPNormalizeStorageName(path);
 
-        spdlog::debug("StartApplication: TVPInitScriptEngine...");
+        spdlog::info("StartApplication: TVPInitScriptEngine...");
         spdlog::default_logger()->flush();
         TVPInitScriptEngine();
 
-        spdlog::debug("StartApplication: TVPInitFontNames...");
+        spdlog::info("StartApplication: TVPInitFontNames...");
         spdlog::default_logger()->flush();
         TVPInitFontNames();
+        spdlog::info("StartApplication: TVPInitFontNames done");
+        spdlog::default_logger()->flush();
 
         // banner
         TVPAddImportantLog(TVPFormatMessage(TVPProgramStartedOn, TVPGetOSName(),
                                             TVPGetPlatformName()));
 
         // TVPInitializeBaseSystems
-        spdlog::debug("StartApplication: TVPInitializeBaseSystems...");
+        spdlog::info("StartApplication: TVPInitializeBaseSystems...");
         spdlog::default_logger()->flush();
         TVPInitializeBaseSystems();
+        spdlog::info("StartApplication: TVPInitializeBaseSystems done");
+        spdlog::default_logger()->flush();
 
         Initialize();
 

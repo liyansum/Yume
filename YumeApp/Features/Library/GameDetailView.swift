@@ -19,6 +19,7 @@ struct GameDetailView: View {
     @State private var exportedSaveURL: URL?
     @State private var saveOperationFailed = false
     @State private var removalFailed = false
+    @State private var renpyBand: RenPyRuntimeBand = .automatic
 
     var body: some View {
         List {
@@ -38,6 +39,22 @@ struct GameDetailView: View {
                 LabeledContent("game.compatibility.engine", value: game.engine.compatibilityVersion)
                 LabeledContent("game.compatibility.status") {
                     Text(compatibilityText)
+                }
+            }
+
+            if game.engine.id.rawValue == "renpy" {
+                Section("game.renpy.runtime.title") {
+                    Picker("game.renpy.runtime.title", selection: $renpyBand) {
+                        Text("game.renpy.runtime.auto").tag(RenPyRuntimeBand.automatic)
+                        Text("game.renpy.runtime.legacy").tag(RenPyRuntimeBand.legacy7)
+                        Text("game.renpy.runtime.modern").tag(RenPyRuntimeBand.modern8)
+                    }
+                    .onChange(of: renpyBand) { _, band in
+                        GameRuntimePreferences.setRenpyBand(band, for: game.id)
+                    }
+                    Text("game.renpy.runtime.help")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -110,6 +127,9 @@ struct GameDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task {
             currentSaveLibrary = await model.saveLibrary(for: game)
+            if game.engine.id.rawValue == "renpy" {
+                renpyBand = GameRuntimePreferences.renpyBand(for: game.id)
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

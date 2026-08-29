@@ -1,16 +1,18 @@
 # Yume 当前任务状态
 
-> 当前任务：LiveContainer 下 RPG Maker 在 configure 后闪退/黑屏
-> 状态：代码已完成，待编译 IPA（build 8）
+> 当前任务：修复 IPA 链接失败、Kirikiri SIGABRT、Ren'Py pyobjus，并加入每游戏 7.x/8.x 选择
+> 状态：代码已完成，待编译 IPA（build 9）
 > 最后更新：2026-08-30
 
 ## 根因
 
-构建 6/7 的 App 日志在 `mkxp.stage.configure.begin` 后约 12 秒进程消失。SDL 在主线程 `CreateWindow` 会新建 UIWindow 并抢 key window；LiveContainer 只合成宿主窗口，ANGLE 绑到那个不可见窗口后黑屏或被 watchdog 杀掉。App 日志异步，所以看不到 `native.started`。
+- IPA：`mkxp_setHostNativeLayer` 写在会进预编译 `libmkxpz-core.a` 的源里，CI 没有重编该库。
+- Kirikiri：StartApplication 在后台线程跑，加载 default.otf 后 SIGABRT。
+- Ren'Py：chdir 进 Windows 导出目录后 `lib/python2.7/iosupport.py` 用 pyobjus 找 macOS Foundation。
+- RPG Maker：构建 7 已正确识别 VX Ace 并启动 RGSS 线程，但 SDL 全屏窗口仍盖住 LiveContainer。
 
 ## 修复
 
-- ANGLE 画到 Yume 播放器视图的 CALayer，不再依赖 SDL 的 UIWindow。
-- SDL 窗口以 HIDDEN 创建，创建后立即降级并交还 key window。
-- `SDL_main` 等到宿主视图进入窗口后再启动。
-- 崩溃信号写入 `mkxp-crash.log`。
+- CI 在 staging 后从源码重编 `libmkxpz-core.a`。
+- Kirikiri 创建/打开/取帧回到主线程。
+- Ren'Py chdir 到捆绑 base；存档路径优先 `RENPY_PATH_TO_SAVES`；详情页可手动选 7.x/8.x。

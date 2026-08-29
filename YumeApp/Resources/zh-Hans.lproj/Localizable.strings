@@ -78,6 +78,11 @@
 "game.compatibility.title" = "兼容性";
 "game.compatibility.engine" = "运行时范围";
 "game.compatibility.status" = "状态";
+"game.renpy.runtime.title" = "Ren'Py 运行时";
+"game.renpy.runtime.auto" = "自动识别";
+"game.renpy.runtime.legacy" = "Ren'Py 7.x";
+"game.renpy.runtime.modern" = "Ren'Py 8.x";
+"game.renpy.runtime.help" = "若自动识别启动了错误的 Python 代际，可在此为该游戏指定 7.x 或 8.x。设置只保存在本机。";
 "player.close" = "退出游戏";
 "player.error.title" = "无法启动游戏";
 "player.error.message" = "已安装的运行时无法为此游戏提供可运行的入口。";

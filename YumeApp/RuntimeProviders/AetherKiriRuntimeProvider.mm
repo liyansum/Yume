@@ -277,18 +277,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 }
 
 - (void)runOnEngineThread:(void (^)(void))work waitUntilDone:(BOOL)wait {
-    if (work == nil) return;
-    if (_engineThread != nil && [NSThread currentThread] == _engineThread) {
-        work();
-        return;
-    }
-    if (_engineThread == nil || _engineThread.isFinished) return;
-    YumeAetherEngineWork *box = [YumeAetherEngineWork new];
-    box.block = work;
-    [box performSelector:@selector(invoke)
-                onThread:_engineThread
-              withObject:nil
-           waitUntilDone:wait];
+    (void)wait;
+    // Kirikiri/TVP aborts (signal 6) if StartApplication runs off the main
+    // thread. Create, open and tick stay on UIKit's thread.
+    if (work != nil) work();
 }
 
 - (void)emitOnMain:(YumeRuntimeEventKind)kind code:(const char *)code {
@@ -317,9 +309,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (int32_t)startEngine {
     if (_stopped || _session == nullptr) return -1;
     [self layoutIfNeeded];
-    [self startEngineThreadIfNeeded];
-    AppendHostLog(_session, "start.engine-thread-ready");
-    [self runOnEngineThread:^{ [self startEngineOnEngineThread]; } waitUntilDone:NO];
+    AppendHostLog(_session, "start.on-main");
+    const int32_t openResult = [self startEngineOnEngineThread];
+    if (openResult != 0) return openResult;
     _displayLink = [CADisplayLink displayLinkWithTarget:self
                                                selector:@selector(displayLinkDidFire:)];
     if (@available(iOS 15.0, *)) {
@@ -409,12 +401,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (void)displayLinkDidFire:(CADisplayLink *)link {
     if (_stopped || _paused || _workerStopped.load() || _workerPaused.load()) return;
-    if (_frameWorkPending.exchange(true)) return;
-    const CFTimeInterval timestamp = link.timestamp;
-    [self runOnEngineThread:^{
-        [self processEngineFrameAtTimestamp:timestamp];
-        _frameWorkPending.store(false);
-    } waitUntilDone:NO];
+    [self processEngineFrameAtTimestamp:link.timestamp];
 }
 
 - (void)processEngineFrameAtTimestamp:(CFTimeInterval)timestamp {

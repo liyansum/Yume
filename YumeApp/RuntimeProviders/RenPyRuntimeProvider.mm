@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
@@ -35,6 +36,7 @@ struct RenPySession {
     std::string saveRoot;
     std::string logRoot;
     std::string launcherPath;
+    std::string runtimeBasePath;
     RenPyGeneration generation = RenPyGeneration::Modern;
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
@@ -165,6 +167,15 @@ static void RenPyEmit(RenPySession *session, YumeRuntimeEventKind kind,
 }
 
 static RenPyGeneration DetectRenPyGeneration(NSString *root) {
+    if (const char *override = std::getenv("YUME_RENPY_GENERATION")) {
+        NSString *value = [[NSString stringWithUTF8String:override] lowercaseString];
+        if ([value isEqualToString:@"modern"] || [value isEqualToString:@"8"]) {
+            return RenPyGeneration::Modern;
+        }
+        if ([value isEqualToString:@"legacy"] || [value isEqualToString:@"7"]) {
+            return RenPyGeneration::Legacy;
+        }
+    }
     NSFileManager *files = NSFileManager.defaultManager;
     NSArray<NSString *> *versionFiles = @[
         @"game/script_version.txt", @"script_version.txt",
@@ -258,8 +269,12 @@ static UIWindow *FindSDLUIKitWindow(void) {
     std::string executable = session->launcherPath;
     dispatch_async(dispatch_get_main_queue(), ^{
         AppendRenPyHostLog(session, "engine.sdl-main.begin");
-        if (!session->contentRoot.empty()) {
-            (void)chdir(session->contentRoot.c_str());
+        // Never chdir into the imported game. Windows/mac exports ship
+        // lib/python2.7/iosupport.py that uses pyobjus against macOS
+        // Foundation paths and abort on iOS.
+        if (!session->runtimeBasePath.empty()) {
+            (void)chdir(session->runtimeBasePath.c_str());
+            AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
         }
         SDL_SetMainReady();
         std::string executableArgument = executable;
@@ -419,6 +434,7 @@ static int32_t RenPyStart(void *opaque) {
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
+    session->runtimeBasePath = base.UTF8String ?: "";
     session->launcherPath = [base stringByAppendingPathComponent:@"main.py"].UTF8String;
     [session->view beginEmbedding];
     RenPyEmit(session, YUME_RUNTIME_EVENT_STARTED,
