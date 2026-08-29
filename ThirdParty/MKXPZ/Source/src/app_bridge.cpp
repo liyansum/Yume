@@ -531,6 +531,19 @@ void *mkxp_getHostUIWindow(void) {
     return s_hostUIWindow.load(std::memory_order_acquire);
 }
 
+static std::atomic<int> s_hostViewWidth{0};
+static std::atomic<int> s_hostViewHeight{0};
+
+void mkxp_setHostViewSize(int width, int height) {
+    s_hostViewWidth.store(width > 0 ? width : 0, std::memory_order_release);
+    s_hostViewHeight.store(height > 0 ? height : 0, std::memory_order_release);
+}
+
+void mkxp_getHostViewSize(int *width, int *height) {
+    if (width) *width = s_hostViewWidth.load(std::memory_order_acquire);
+    if (height) *height = s_hostViewHeight.load(std::memory_order_acquire);
+}
+
 // Input bridge
 
 void mkxp_injectKeyEvent(int scancode, int pressed) {
@@ -1121,6 +1134,8 @@ void mkxp_resetSessionState(void) {
     s_safeAreaInsetsChanged.store(true, std::memory_order_release);
     s_hostNativeLayer.store(nullptr, std::memory_order_release);
     s_hostUIWindow.store(nullptr, std::memory_order_release);
+    s_hostViewWidth.store(0, std::memory_order_release);
+    s_hostViewHeight.store(0, std::memory_order_release);
 }
 
 void mkxp_setDebugLogPath(const char *path) {

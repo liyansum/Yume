@@ -70,6 +70,7 @@ require_symbol "$engine_lib/libmkxpz-core.a" mkxp_setHostNativeLayer
 require_symbol "$engine_lib/libmkxpz-core.a" mkxp_getHostNativeLayer
 require_symbol "$engine_lib/libmkxpz-core.a" mkxp_setHostUIWindow
 require_symbol "$engine_lib/libmkxpz-core.a" mkxp_demoteSDLWindow
+require_symbol "$engine_lib/libmkxpz-core.a" mkxp_setHostViewSize
 require_symbol "$mkxp_lib/mkxp18-merged.o" mkxp_get_script_binding_18
 require_symbol "$mkxp_lib/mkxp19-merged.o" mkxp_get_script_binding_19
 require_symbol "$mkxp_lib/mkxp31-merged.o" mkxp_get_script_binding_31

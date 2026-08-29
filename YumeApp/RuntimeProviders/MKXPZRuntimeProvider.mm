@@ -3,7 +3,9 @@
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <fcntl.h>
 #include <mutex>
@@ -340,28 +342,36 @@ static void MKXPInfo(const char *message, void *context) {
     BOOL _sdlStarted;
 }
 
++ (Class)layerClass {
+    return [CAMetalLayer class];
+}
+
 - (instancetype)initWithSession:(MKXPSession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
-        self.layer.contentsScale = UIScreen.mainScreen.nativeScale;
+        [self syncHostMetalLayer];
     }
     return self;
 }
 
 - (void)syncHostMetalLayer {
     CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-    self.layer.contentsScale = scale;
-    CGRect bounds = self.layer.bounds;
-    for (CALayer *sublayer in self.layer.sublayers) {
+    CAMetalLayer *metal = (CAMetalLayer *)self.layer;
+    metal.contentsScale = scale;
+    metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    metal.framebufferOnly = YES;
+    CGRect bounds = metal.bounds;
+    metal.drawableSize = CGSizeMake(std::max(1.0, bounds.size.width * scale),
+                                    std::max(1.0, bounds.size.height * scale));
+    for (CALayer *sublayer in metal.sublayers) {
         if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
-            CAMetalLayer *metal = (CAMetalLayer *)sublayer;
-            metal.frame = bounds;
-            metal.contentsScale = scale;
-            metal.drawableSize = CGSizeMake(bounds.size.width * scale,
-                                            bounds.size.height * scale);
+            CAMetalLayer *child = (CAMetalLayer *)sublayer;
+            child.frame = bounds;
+            child.contentsScale = scale;
+            child.drawableSize = metal.drawableSize;
         }
     }
 }
@@ -375,8 +385,13 @@ static void MKXPInfo(const char *message, void *context) {
     if (_sdlStarted || _session == nullptr || self.window == nil) return;
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
+    [self syncHostMetalLayer];
     mkxp_setHostNativeLayer((__bridge void *)self.layer);
     mkxp_setHostUIWindow((__bridge void *)self.window);
+    const CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
+    mkxp_setHostViewSize(
+        static_cast<int>(std::max(1.0, std::round(self.bounds.size.width * scale))),
+        static_cast<int>(std::max(1.0, std::round(self.bounds.size.height * scale))));
     [self.window makeKeyAndVisible];
     AppendMKXPHostLog(_session, "view.in-window");
     MKXPSession *session = _session;

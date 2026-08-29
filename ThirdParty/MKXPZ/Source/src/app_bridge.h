@@ -423,6 +423,8 @@ void        mkxp_setHostNativeLayer(void *calayer);
 void       *mkxp_getHostNativeLayer(void);
 void        mkxp_setHostUIWindow(void *uiwindow);
 void       *mkxp_getHostUIWindow(void);
+void        mkxp_setHostViewSize(int width, int height);
+void        mkxp_getHostViewSize(int *width, int *height);
 
 // Per-game settings (UI -> Engine), set by the host before engine
 // boot and read by the engine during the run.
@@ -697,6 +699,8 @@ static inline void        mkxp_setHostNativeLayer(void *calayer) { (void)calayer
 static inline void       *mkxp_getHostNativeLayer(void) { return NULL; }
 static inline void        mkxp_setHostUIWindow(void *uiwindow) { (void)uiwindow; }
 static inline void       *mkxp_getHostUIWindow(void) { return NULL; }
+static inline void        mkxp_setHostViewSize(int width, int height) { (void)width; (void)height; }
+static inline void        mkxp_getHostViewSize(int *width, int *height) { if (width) *width = 0; if (height) *height = 0; }
 
 static inline void        mkxp_applyPerGameSettings(MKXPVerticalAlignment verticalAlignment, bool postloadEnabled) { (void)verticalAlignment; (void)postloadEnabled; }
 // CENTER, not the mobile TOP_CENTER default: stock desktop mkxp-z

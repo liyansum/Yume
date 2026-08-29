@@ -84,28 +84,35 @@ static int TVPInternalEnumFonts(
     const std::function<tTJSBinaryStream *(TVPFontNamePathInfo *)> &getter,
     std::vector<ttstr> *fontNames = nullptr) {
     unsigned int faceCount = 0;
-    FT_Face fontface;
+    if(pBuf == nullptr || buflen <= 0)
+        return 0;
+    try {
+    FT_Face fontface = nullptr;
     FT_Error error =
         FT_New_Memory_Face(TVPGetFontLibrary(), pBuf, buflen, 0, &fontface);
-    if(error) {
+    if(error || fontface == nullptr) {
         TVPAddLog(ttstr(TJS_W("Load Font \"") + FontPath + "\" failed (" +
                         TJSIntegerToString((int)error) + ")"));
         return faceCount;
     }
     int nFaceNum = fontface->num_faces;
+    if(nFaceNum > 32)
+        nFaceNum = 32;
     for(int i = 0; i < nFaceNum; ++i) {
         if(i > 0) {
             if(FT_New_Memory_Face(TVPGetFontLibrary(), pBuf, buflen, i,
-                                  &fontface)) {
+                                  &fontface) ||
+               fontface == nullptr) {
                 continue;
             }
         }
         if(FT_IS_SCALABLE(fontface)) {
             FT_UInt namecount = FT_Get_Sfnt_Name_Count(fontface);
-            int addCount = 0;
+            if(namecount > 256)
+                namecount = 256;
             for(FT_UInt j = 0; j < namecount; ++j) {
                 FT_SfntName name;
-                if(FT_Get_Sfnt_Name(fontface, j, &name)) {
+                if(FT_Get_Sfnt_Name(fontface, j, &name) || name.string == nullptr) {
                     continue;
                 }
                 if(name.name_id != TT_NAME_ID_FONT_FAMILY) {
@@ -129,14 +136,15 @@ static int TVPInternalEnumFonts(
                 }
                 ttstr fontname;
                 if(name.encoding_id == TT_MS_ID_UNICODE_CS) {
-                    std::vector<tjs_char> tmp;
                     int namelen = name.string_len / 2;
-                    tmp.resize(namelen + 1);
+                    if(namelen <= 0 || namelen > 256)
+                        continue;
+                    std::vector<tjs_char> tmp(static_cast<size_t>(namelen) + 1);
                     for(int k = 0; k < namelen; ++k) {
-                        tmp[k] = (name.string[k * 2] << 8) |
+                        tmp[static_cast<size_t>(k)] = (name.string[k * 2] << 8) |
                             (name.string[k * 2 + 1]);
                     }
-                    fontname = &tmp.front();
+                    fontname = tmp.data();
                 } else {
                     continue;
                 }
@@ -150,9 +158,8 @@ static int TVPInternalEnumFonts(
                        fontNames->end()) {
                     fontNames->emplace_back(fontname);
                 }
-                addCount = 1;
             }
-            /*if (!addCount)*/ {
+            if(fontface->family_name != nullptr && fontface->family_name[0] != '\0') {
                 ttstr fontname((tjs_nchar *)fontface->family_name);
                 TVPFontNamePathInfo info;
                 info.Path = FontPath;
@@ -169,6 +176,12 @@ static int TVPInternalEnumFonts(
         }
 
         FT_Done_Face(fontface);
+        fontface = nullptr;
+    }
+    } catch(...) {
+        spdlog::error("TVPInternalEnumFonts aborted while reading {}",
+                      FontPath.AsStdString());
+        return 0;
     }
     return faceCount;
 }
@@ -244,17 +257,21 @@ void TVPInitFontNames() {
         if(fdata.empty())
             return false;
         spdlog::info("loaded font: {}", path);
-        return TVPInternalEnumFonts(
-                   fdata.data(), fdata.size(), label.c_str(),
-                   [&tryReadFont](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
-                       auto d = tryReadFont(info->Path.AsStdString());
-                       if(d.empty())
-                           return nullptr;
-                       auto *ret = new tTVPMemoryStream();
-                       ret->WriteBuffer(d.data(), d.size());
-                       ret->SetPosition(0);
-                       return ret;
-                   }) > 0;
+        spdlog::default_logger()->flush();
+        const int faces = TVPInternalEnumFonts(
+            fdata.data(), fdata.size(), label.c_str(),
+            [&tryReadFont](TVPFontNamePathInfo *info) -> tTJSBinaryStream * {
+                auto d = tryReadFont(info->Path.AsStdString());
+                if(d.empty())
+                    return nullptr;
+                auto *ret = new tTVPMemoryStream();
+                ret->WriteBuffer(d.data(), d.size());
+                ret->SetPosition(0);
+                return ret;
+            });
+        spdlog::info("enumerated font faces={} path={}", faces, path);
+        spdlog::default_logger()->flush();
+        return faces > 0;
     };
 
     auto tryLoadFontStorageOrDirect = [&tryLoadFontDirect](const ttstr &path) -> bool {

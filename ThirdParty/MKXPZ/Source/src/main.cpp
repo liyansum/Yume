@@ -453,8 +453,13 @@ static SDL_Window *createPersistentWindow(const Config &initConf) {
 
   if (!win)
     showInitError(std::string("Error creating window: ") + SDL_GetError());
-  else
+  else {
+    int hostW = 0, hostH = 0;
+    mkxp_getHostViewSize(&hostW, &hostH);
+    if (hostW > 0 && hostH > 0)
+      SDL_SetWindowSize(win, hostW, hostH);
     mkxp_demoteSDLWindow(win);
+  }
 
   return win;
 }
