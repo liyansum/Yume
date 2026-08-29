@@ -258,7 +258,7 @@ diff --git a/src/video/uikit/SDL_uikitwindow.m b/src/video/uikit/SDL_uikitwindow
 index d69617983..233dec716 100644
 --- a/src/video/uikit/SDL_uikitwindow.m
 +++ b/src/video/uikit/SDL_uikitwindow.m
-@@ -212,11 +212,24 @@ int UIKit_CreateWindow(_THIS, SDL_Window *window)
+@@ -212,11 +212,27 @@ int UIKit_CreateWindow(_THIS, SDL_Window *window)
  
          /* ignore the size user requested, and make a fullscreen window */
          /* !!! FIXME: can we have a smaller view? */
@@ -268,6 +268,9 @@ index d69617983..233dec716 100644
 +            UIWindowScene *scene = UIKit_GetActiveWindowScene();
 +            if (scene) {
 +                uiwindow = [[SDL_uikitwindow alloc] initWithWindowScene:scene];
++                /* initWithWindowScene: leaves a zero frame. EAGL then
++                 * fails with "Failed to create OpenGL ES drawable". */
++                uiwindow.frame = data.uiscreen.bounds;
 +            }
 +        }
 +        if (!uiwindow) {

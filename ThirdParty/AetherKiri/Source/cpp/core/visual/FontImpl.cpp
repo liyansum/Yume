@@ -107,6 +107,25 @@ static int TVPInternalEnumFonts(
             }
         }
         if(FT_IS_SCALABLE(fontface)) {
+#if defined(__APPLE__) && TARGET_OS_IOS
+            // Device logs abort (signal 6) inside FT_Get_Sfnt_Name after
+            // a font file loads. Register the FreeType family name only.
+            ttstr fontname = (fontface->family_name != nullptr &&
+                              fontface->family_name[0] != '\0')
+                                 ? ttstr((tjs_nchar *)fontface->family_name)
+                                 : ttstr(TJS_W("default"));
+            TVPFontNamePathInfo info;
+            info.Path = FontPath;
+            info.Index = i;
+            info.Getter = getter;
+            TVPFontNames.Add(fontname, info);
+            if(fontNames &&
+               std::find(fontNames->begin(), fontNames->end(), fontname) ==
+                   fontNames->end()) {
+                fontNames->emplace_back(fontname);
+            }
+            ++faceCount;
+#else
             FT_UInt namecount = FT_Get_Sfnt_Name_Count(fontface);
             if(namecount > 256)
                 namecount = 256;
@@ -173,6 +192,7 @@ static int TVPInternalEnumFonts(
                 }
             }
             ++faceCount;
+#endif
         }
 
         FT_Done_Face(fontface);
@@ -206,8 +226,12 @@ int TVPEnumFontsProc(const ttstr &FontPath,
     buf.resize(bufflen);
     Stream->ReadBuffer(&buf.front(), bufflen);
     delete Stream;
-    return TVPInternalEnumFonts(&buf.front(), bufflen, FontPath, nullptr,
-                                fontNames);
+    const int faces = TVPInternalEnumFonts(&buf.front(), bufflen, FontPath, nullptr,
+                                           fontNames);
+    spdlog::info("TVPEnumFontsProc faces={} path={}", faces,
+                 FontPath.AsStdString());
+    spdlog::default_logger()->flush();
+    return faces;
 }
 
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {

@@ -389,11 +389,22 @@ static std::string TVPRestoreIOSPathCase(std::string posixPath) {
             root.pop_back();
         if(root.empty())
             return;
-        for(const auto &known : roots) {
-            if(_utf8_strcasecmp(known.c_str(), root.c_str()) == 0)
+        auto insert = [&](std::string candidate) {
+            if(candidate.empty())
                 return;
+            for(const auto &known : roots) {
+                if(_utf8_strcasecmp(known.c_str(), candidate.c_str()) == 0)
+                    return;
+            }
+            roots.push_back(std::move(candidate));
+        };
+        insert(root);
+        if(root.compare(0, 8, "/private") == 0 && root.size() > 8 &&
+           root[8] == '/') {
+            insert(root.substr(8));
+        } else if(root.compare(0, 4, "/var") == 0) {
+            insert(std::string("/private") + root);
         }
-        roots.push_back(std::move(root));
     };
     if(!TVPNativeProjectDir.IsEmpty())
         addRoot(TVPNativeProjectDir.AsStdString());
@@ -424,8 +435,20 @@ static std::string TVPRestoreIOSPathCase(std::string posixPath) {
         break;
     }
     if(restored.empty()) {
-        spdlog::warn("iOS path case restore: no prefix for {}", posixPath);
-        return posixPath;
+        // Bundle, save-library, and /private vs /var variants are not
+        // always under NativeProjectDir/HOME. Walk from /var/mobile
+        // (not "/") so we restore Containers/Application Support casing.
+        if(posixPath.compare(0, 8, "/private") == 0 && posixPath.size() > 8 &&
+           posixPath[8] == '/') {
+            restored = "/private";
+            remainder = posixPath.substr(8);
+        } else if(posixPath.compare(0, 4, "/var") == 0) {
+            restored = "/var";
+            remainder = posixPath.substr(4);
+        } else {
+            spdlog::warn("iOS path case restore: no prefix for {}", posixPath);
+            return posixPath;
+        }
     }
 
     size_t index = 0;

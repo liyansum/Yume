@@ -366,13 +366,24 @@ static void MKXPInfo(const char *message, void *context) {
         metal.framebufferOnly = YES;
         metal.drawableSize = drawable;
     }
+    NSUInteger metalLayers = 0;
     for (CALayer *sublayer in parent.sublayers) {
         if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
             CAMetalLayer *child = (CAMetalLayer *)sublayer;
             child.frame = bounds;
             child.contentsScale = scale;
             child.drawableSize = drawable;
+            ++metalLayers;
         }
+    }
+    if (_session != nullptr && !CGRectIsEmpty(bounds)) {
+        char line[160];
+        std::snprintf(line, sizeof(line),
+                      "host.layer class=%s metalSublayers=%lu bounds=%.0fx%.0f",
+                      NSStringFromClass(parent.class).UTF8String ?: "?",
+                      (unsigned long)metalLayers,
+                      bounds.size.width, bounds.size.height);
+        AppendMKXPHostLog(_session, line);
     }
 }
 

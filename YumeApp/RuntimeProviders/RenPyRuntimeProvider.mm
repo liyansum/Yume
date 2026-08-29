@@ -276,6 +276,18 @@ static UIWindow *FindSDLUIKitWindow(void) {
             (void)chdir(session->runtimeBasePath.c_str());
             AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
         }
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
+        SDL_SetHint("SDL_OPENGL_ES_DRIVER", "1");
+        SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+        SDL_GL_SetAttribute(SDL_GL_RETAINED_BACKING, 0);
+        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
+        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
         SDL_SetMainReady();
         std::string executableArgument = executable;
         std::string gameRoot = session->contentRoot;
