@@ -223,7 +223,7 @@ final class LocalGameStorageTests: XCTestCase {
         )
         let aceGame = try writeRGSSGame(
             in: storage,
-            scriptsPath: "Data/Scripts.rvdata2"
+            scriptsPath: "Game.rgss3a"
         )
 
         let xpMounts = try await storage.rtpMountRoots(for: xpGame)

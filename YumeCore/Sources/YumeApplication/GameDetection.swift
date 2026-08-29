@@ -5,6 +5,8 @@ public struct DetectionSnapshot: Sendable, Equatable {
     public let rootRelativePath: StorageRelativePath
     public let regularFiles: Set<String>
     public let directories: Set<String>
+    private let regularFilesByNormalizedPath: [String: String]
+    private let directoriesByNormalizedPath: [String: String]
 
     public init(
         rootRelativePath: StorageRelativePath,
@@ -12,32 +14,57 @@ public struct DetectionSnapshot: Sendable, Equatable {
         directories: Set<String>
     ) {
         self.rootRelativePath = rootRelativePath
-        self.regularFiles = Set(regularFiles.map(Self.normalized))
-        self.directories = Set(directories.map(Self.normalized))
+        self.regularFiles = regularFiles
+        self.directories = directories
+        self.regularFilesByNormalizedPath = Self.indexByNormalizedPath(regularFiles)
+        self.directoriesByNormalizedPath = Self.indexByNormalizedPath(directories)
     }
 
     public func containsFile(_ relativePath: String) -> Bool {
-        regularFiles.contains(Self.normalized(relativePath))
+        matchingFile(relativePath) != nil
     }
 
     public func containsDirectory(_ relativePath: String) -> Bool {
-        directories.contains(Self.normalized(relativePath))
+        matchingDirectory(relativePath) != nil
+    }
+
+    public func matchingFile(_ relativePath: String) -> String? {
+        regularFilesByNormalizedPath[Self.normalized(relativePath)]
+    }
+
+    public func matchingDirectory(_ relativePath: String) -> String? {
+        directoriesByNormalizedPath[Self.normalized(relativePath)]
     }
 
     public func containsFile(withExtension extensionName: String) -> Bool {
         let suffix = ".\(extensionName.lowercased())"
-        return regularFiles.contains { $0.hasSuffix(suffix) }
+        return regularFilesByNormalizedPath.keys.contains { $0.hasSuffix(suffix) }
     }
 
     public func files(withExtension extensionName: String) -> [String] {
         let suffix = ".\(extensionName.lowercased())"
-        return regularFiles.filter { $0.hasSuffix(suffix) }.sorted()
+        return regularFilesByNormalizedPath
+            .filter { $0.key.hasSuffix(suffix) }
+            .map(\.value)
+            .sorted()
+    }
+
+    private static func indexByNormalizedPath(_ paths: Set<String>) -> [String: String] {
+        var result: [String: String] = [:]
+        for path in paths.sorted() {
+            let originalPath = normalizedSeparators(path)
+            result[normalized(originalPath), default: originalPath] = originalPath
+        }
+        return result
     }
 
     private static func normalized(_ path: String) -> String {
+        normalizedSeparators(path).lowercased()
+    }
+
+    private static func normalizedSeparators(_ path: String) -> String {
         path.replacingOccurrences(of: "\\", with: "/")
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            .lowercased()
     }
 }
 

@@ -919,9 +919,15 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         let paths = manifest.detection.evidence.map {
             $0.relativePath.rawValue.lowercased()
         }
-        if paths.contains(where: { $0.hasSuffix("scripts.rvdata2") }) { return .vxAce }
-        if paths.contains(where: { $0.hasSuffix("scripts.rvdata") }) { return .vx }
-        if paths.contains(where: { $0.hasSuffix("scripts.rxdata") }) { return .xp }
+        if paths.contains(where: {
+            $0.hasSuffix("scripts.rvdata2") || $0.hasSuffix(".rgss3a")
+        }) { return .vxAce }
+        if paths.contains(where: {
+            $0.hasSuffix("scripts.rvdata") || $0.hasSuffix(".rgss2a")
+        }) { return .vx }
+        if paths.contains(where: {
+            $0.hasSuffix("scripts.rxdata") || $0.hasSuffix(".rgssad")
+        }) { return .xp }
         return nil
     }
 

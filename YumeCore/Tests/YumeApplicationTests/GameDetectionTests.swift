@@ -52,6 +52,7 @@ final class GameDetectionTests: XCTestCase {
         XCTAssertTrue(snapshot.containsFile("www/js/rmmz_core.js"))
         XCTAssertTrue(snapshot.containsDirectory("www/data"))
         XCTAssertTrue(snapshot.containsFile(withExtension: "JS"))
+        XCTAssertEqual(snapshot.matchingFile("www/js/rmmz_core.js"), "WWW/JS/RMMZ_CORE.JS")
     }
 }
 

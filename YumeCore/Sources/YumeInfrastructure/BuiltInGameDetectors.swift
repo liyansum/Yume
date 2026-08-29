@@ -122,9 +122,9 @@ public struct SignatureGameDetector: GameDetector, Sendable {
         let matchedPath: String?
         switch rule.match {
         case let .file(path):
-            matchedPath = snapshot.containsFile(path) ? path.lowercased() : nil
+            matchedPath = snapshot.matchingFile(path)
         case let .directory(path):
-            matchedPath = snapshot.containsDirectory(path) ? path.lowercased() : nil
+            matchedPath = snapshot.matchingDirectory(path)
         case let .fileExtension(extensionName):
             matchedPath = snapshot.files(withExtension: extensionName).first
         }
@@ -168,7 +168,10 @@ public extension SignatureGameDetector {
         requiredAny: [
             Rule(.file("data/scripts.rxdata"), kind: .requiredFile, detailCode: "rgss1.scripts", score: 80),
             Rule(.file("data/scripts.rvdata"), kind: .requiredFile, detailCode: "rgss2.scripts", score: 80),
-            Rule(.file("data/scripts.rvdata2"), kind: .requiredFile, detailCode: "rgss3.scripts", score: 80)
+            Rule(.file("data/scripts.rvdata2"), kind: .requiredFile, detailCode: "rgss3.scripts", score: 80),
+            Rule(.fileExtension("rgssad"), kind: .requiredFile, detailCode: "rgss1.archive", score: 80),
+            Rule(.fileExtension("rgss2a"), kind: .requiredFile, detailCode: "rgss2.archive", score: 80),
+            Rule(.fileExtension("rgss3a"), kind: .requiredFile, detailCode: "rgss3.archive", score: 80)
         ],
         supporting: [
             Rule(.fileExtension("ini"), kind: .metadata, detailCode: "rgss.ini", score: 15),

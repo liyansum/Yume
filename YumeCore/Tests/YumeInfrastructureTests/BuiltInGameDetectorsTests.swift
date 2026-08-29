@@ -23,6 +23,21 @@ final class BuiltInGameDetectorsTests: XCTestCase {
         XCTAssertEqual(result.compatibility.status, .runnable)
     }
 
+    func testDetectsPackagedRPGMakerVXAceRelease() throws {
+        let snapshot = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["Game.ini", "Game.exe", "Game.rgss3a"],
+            directories: []
+        )
+
+        guard case let .selected(result) = BuiltInGameDetectors.registry.decide(snapshot) else {
+            return XCTFail("Expected packaged RPG Maker VX Ace detection")
+        }
+        XCTAssertEqual(result.engine.id.rawValue, "rgss")
+        XCTAssertEqual(result.compatibility.status, .runnable)
+        XCTAssertTrue(result.evidence.contains { $0.detailCode == "rgss3.archive" })
+    }
+
     func testNativeNodePluginBlocksWebGame() throws {
         let snapshot = DetectionSnapshot(
             rootRelativePath: try StorageRelativePath(rawValue: "original"),

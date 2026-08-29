@@ -248,10 +248,14 @@ public actor DirectoryGameImportService {
 
             try await advance(taskID, to: .scanningCompatibility)
             let importStorage = storage
+            let detectionRoot = selected.rootRelativePath
             let magicIssues = await DetectionMagic.verify(selected) { path, byteCount in
-                try await importStorage.readFileHead(
+                let rootedPath = try StorageRelativePath(
+                    rawValue: detectionRoot.rawValue + "/" + path.rawValue
+                )
+                return try await importStorage.readFileHead(
                     for: taskID,
-                    relativePath: path,
+                    relativePath: rootedPath,
                     byteCount: byteCount
                 )
             }

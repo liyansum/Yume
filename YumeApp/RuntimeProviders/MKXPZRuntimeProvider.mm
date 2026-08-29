@@ -73,7 +73,16 @@ static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
             return MKXPRubyGeneration::Ruby31;
         }
     }
-    if ([files fileExistsAtPath:[root stringByAppendingPathComponent:@"Data/Scripts.rvdata2"]]) {
+    bool hasVXAceArchive = false;
+    for (NSString *entry in [files contentsOfDirectoryAtPath:root error:nil] ?: @[]) {
+        if ([[entry.pathExtension lowercaseString] isEqualToString:@"rgss3a"]) {
+            hasVXAceArchive = true;
+            break;
+        }
+    }
+    if (hasVXAceArchive ||
+        [files fileExistsAtPath:[root stringByAppendingPathComponent:@"Data/Scripts.rvdata2"]] ||
+        [files fileExistsAtPath:[root stringByAppendingPathComponent:@"data/scripts.rvdata2"]]) {
         return MKXPRubyGeneration::Ruby19;
     }
     return MKXPRubyGeneration::Ruby18;

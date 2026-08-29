@@ -46,6 +46,28 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         XCTAssertTrue(taskIDs.isEmpty)
     }
 
+    func testPackagedRPGMakerVXAceFolderImportsWithoutExtractedDataDirectory() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        try fixture.makePackagedVXAceGame()
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+
+        let imported = try await service.importDirectory(at: fixture.sourceRoot)
+        let location = try await storage.contentLocation(for: imported.id)
+
+        XCTAssertEqual(imported.engine.id.rawValue, "rgss")
+        XCTAssertEqual(imported.compatibilityStatus, .runnable)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: location.rootURL.appendingPathComponent("Game.rgss3a").path
+            )
+        )
+    }
+
     func testRPGMakerMZZIPImportsThroughExtractionDetectionAndCommit() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
@@ -403,6 +425,15 @@ private struct ImportFixture {
         if nativePlugin {
             try write("not executable fixture data", to: "native/plugin.node")
         }
+    }
+
+    func makePackagedVXAceGame() throws {
+        try write("[Game]\nLibrary=System/RGSS301.dll\n", to: "Game.ini")
+        try write("self-authored executable placeholder", to: "Game.exe")
+        var archive = Data(Array("RGSSAD\0".utf8))
+        archive.append(0x03)
+        archive.append(Data(repeating: 0xA5, count: 32))
+        try archive.write(to: sourceRoot.appendingPathComponent("Game.rgss3a"))
     }
 
     func write(_ value: String, to relativePath: String) throws {
