@@ -113,7 +113,7 @@
 "compatibility.runtime.available" = "ランタイム導入済み";
 "compatibility.runtime.detectionOnly" = "検出のみ";
 "compatibility.runtime.dedicated" = "専用ランタイム";
-"compatibility.runtime.message" = "現在起動できるのはチェック付きのエンジンだけです。検出のみのエンジンは安全に拒否され、ゲームコードを実行しません。";
+"compatibility.runtime.message" = "緑のチェックは制限付き Web ランタイム、青いパッケージは内蔵の専用ランタイムを使用し、どちらもゲームを起動できます。検出のみのエンジンは安全に拒否され、ゲームコードを実行しません。";
 "diagnostics.library.title" = "ローカル状態";
 "diagnostics.library.loaded" = "ライブラリ読み取り可能";
 "diagnostics.library.games" = "ゲーム";

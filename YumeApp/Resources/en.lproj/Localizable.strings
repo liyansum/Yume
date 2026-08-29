@@ -113,7 +113,7 @@
 "compatibility.runtime.available" = "Runtime installed";
 "compatibility.runtime.detectionOnly" = "Detection only";
 "compatibility.runtime.dedicated" = "Dedicated runtime";
-"compatibility.runtime.message" = "Only engines marked with a check can currently start. Detection-only engines fail closed and do not execute game code.";
+"compatibility.runtime.message" = "Green checks use the restricted Web runtime; blue packages use a bundled dedicated runtime. Both can start games. Detection-only engines fail closed and do not execute game code.";
 "diagnostics.library.title" = "Local State";
 "diagnostics.library.loaded" = "Library readable";
 "diagnostics.library.games" = "Games";
