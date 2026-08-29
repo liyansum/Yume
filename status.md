@@ -1,15 +1,17 @@
 # Yume 当前任务状态
 
-> 当前任务：全量检查并修复导入识别、RAR、RTP、运行时黑屏/闪退、诊断与 UI
-> 状态：已完成并推送；GitHub unsigned IPA 编译成功
+> 当前任务：修复 XP3 线程闪退、VX Ace 错用 Ruby 1.8、RTP 多世代 ZIP 导入
+> 状态：代码已完成，待推送并编译 IPA
 > 最后更新：2026-08-29
 
-## 完成
+## 根因
 
-- 拓宽八引擎识别，折叠嵌套根，Windows DLL 不再误拒可运行包。
-- ZIP 支持 CP932/GBK 文件名与反斜杠路径；新增未加密 RAR/RAR5 导入。
-- RTP 改为 ZIP/7z 复制导入，可自动识别或手动选择 XP/VX/VX Ace。
-- mkxp 延后设置游戏路径、AetherKiri 引擎队列、Ren'Py 使用捆绑 base；虚拟按键不再挡住点击。
-- 诊断补充运行时日志、导入失败元数据；Release 隐藏开发者页。
-- 资料库封面读取游戏内图片；四语言键一致。
-- pretest 127 项通过；`main` 已推送；workflow `33251802665` 编译成功。
+- Kirikiri：`dispatch_sync` 在主线程创建引擎，DisplayLink 却在后台队列取帧，触发 “engine handle must be used on the thread where engine_create was called”。
+- VX Ace：只扫顶层文件，把带包装目录的 `Game.rgss3a` 当成 RGSS1/2；RTP 未导入时 `rtp.mount-count=0` 后 abort。
+- RTP：只精确匹配文件夹名 XP/VX/VXAce，整包多个 `app` 被当成歧义；已导入其中一代会让整包失败。
+
+## 修复
+
+- Kirikiri 所有 engine_* 回到创建线程（主线程）；存档写到游戏 saves 目录。
+- Ruby 代际根据 Game.ini / 递归 rgss3a、rvdata2 判断。
+- RTP 按父目录名识别多个世代，优先 `app`，跳过 `sys`，已导入的世代跳过而不是整包失败。

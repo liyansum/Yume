@@ -209,6 +209,49 @@ final class SafeZIPExtractorTests: XCTestCase {
         )
     }
 
+    func testVXDirectoryZIPWithAppFolderImports() async throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        try ZIPBuilder.make([
+            .directory("VX/"),
+            .directory("VX/app/"),
+            .directory("VX/app/Audio/BGM/"),
+            .stored("VX/app/Audio/BGM/theme.ogg", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("VX/app/Graphics/System/"),
+            .stored("VX/app/Graphics/System/Window.png", data: Data("hello".utf8), crc32: 0x3610a686)
+        ]).write(to: fixture.archiveURL)
+        let storage = LocalGameStorage(
+            baseURL: fixture.root.appendingPathComponent("Storage", isDirectory: true)
+        )
+
+        let packages = try await storage.importRPGMakerRTP(from: fixture.archiveURL)
+
+        XCTAssertEqual(packages.compactMap(\.variant), [.vx])
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: storage.layout.rtp.appendingPathComponent("rgss/rgss-vx/Audio/BGM/theme.ogg").path
+        ))
+    }
+
+    func testJapaneseRTPWrappersImportAllThreeGenerations() async throws {
+        let fixture = try ZIPFixture()
+        defer { fixture.remove() }
+        try ZIPBuilder.make([
+            .directory("RPGツクールXP/app/Audio/BGM/"),
+            .stored("RPGツクールXP/app/Audio/BGM/theme.ogg", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("RPGツクールVX/app/Graphics/System/"),
+            .stored("RPGツクールVX/app/Graphics/System/Window.png", data: Data("hello".utf8), crc32: 0x3610a686),
+            .directory("RPGツクールVXAce/app/Fonts/"),
+            .stored("RPGツクールVXAce/app/Fonts/game.ttf", data: Data("hello".utf8), crc32: 0x3610a686)
+        ]).write(to: fixture.archiveURL)
+        let storage = LocalGameStorage(
+            baseURL: fixture.root.appendingPathComponent("Storage", isDirectory: true)
+        )
+
+        let packages = try await storage.importRPGMakerRTP(from: fixture.archiveURL)
+
+        XCTAssertEqual(Set(packages.compactMap(\.variant)), Set(RPGMakerRTPVariant.allCases))
+    }
+
     func testCombinedRPGMakerRTPZIPImportsXPVXAndVXAceAtomically() async throws {
         let fixture = try ZIPFixture()
         defer { fixture.remove() }

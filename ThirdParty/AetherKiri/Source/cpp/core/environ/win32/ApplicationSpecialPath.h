@@ -6,6 +6,7 @@
 #include "FilePathUtil.h"
 #include "StorageIntf.h"
 
+#include <cstdlib>
 #include <string>
 
 class ApplicationSpecialPath {
@@ -94,6 +95,14 @@ public:
             key = "default";
         return ttstr(("/userfs/aetherkiri/savedata/" + key + "/").c_str());
 #else
+        if(const char *writable = std::getenv("YUME_KIRIKIRI_SAVEDATA")) {
+            if(writable[0] != '\0') {
+                std::string path(writable);
+                if(path.back() != '/' && path.back() != '\\')
+                    path += '/';
+                return ttstr(path.c_str());
+            }
+        }
         ttstr nativeDataPath = TVPGetAppPath();
         TVPGetLocalName(nativeDataPath);
         nativeDataPath += "/savedata/";

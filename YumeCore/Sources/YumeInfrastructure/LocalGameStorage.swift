@@ -951,10 +951,13 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             variantHint: variantHint
         )
         var index = try loadRTPIndex()
-        for variant in discovered.keys {
-            guard !index.packages.contains(where: { $0.variant == variant }) else {
-                throw RTPStoreError.duplicateVariant(variant)
+        let alreadyImported = Set(index.packages.compactMap(\.variant))
+        let pending = discovered.filter { !alreadyImported.contains($0.key) }
+        if pending.isEmpty {
+            if let first = discovered.keys.sorted(by: { $0.rawValue < $1.rawValue }).first {
+                throw RTPStoreError.duplicateVariant(first)
             }
+            throw RTPStoreError.unidentifiedRPGMakerVariant
         }
 
         let engine = EngineID(rawValue: "rgss")
@@ -967,7 +970,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         var packages: [RTPPackage] = []
         do {
             for variant in RPGMakerRTPVariant.allCases {
-                guard let contentRoot = discovered[variant] else { continue }
+                guard let contentRoot = pending[variant] else { continue }
                 let summary = try summarizeTree(at: contentRoot)
                 guard summary.fileCount > 0 else { throw RTPStoreError.sourceIsEmpty }
                 let destination = engineDirectory.appendingPathComponent(
@@ -1083,10 +1086,10 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         return try loadRTPIndex().packages
             .filter { package in
                 guard package.engineID == game.engine.id else { return false }
-                guard game.engine.id.rawValue == "rgss", let packageVariant = package.variant else {
-                    return true
-                }
-                return packageVariant == rgssVariant
+                guard game.engine.id.rawValue == "rgss" else { return true }
+                guard let wanted = rgssVariant else { return true }
+                guard let packageVariant = package.variant else { return true }
+                return packageVariant == wanted
             }
             .map { package in
                 layout.rtp
@@ -1183,6 +1186,10 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                     continue
                 }
                 guard values.isDirectory == true else { continue }
+                if candidate.lastPathComponent.caseInsensitiveCompare("sys") == .orderedSame {
+                    enumerator.skipDescendants()
+                    continue
+                }
                 if try isRTPRoot(candidate) {
                     candidates.append(candidate)
                     enumerator.skipDescendants()
@@ -1229,13 +1236,28 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                 .joined()
         }
 
-        func variantForWrapperName(_ name: String) -> RPGMakerRTPVariant? {
-            switch token(name) {
-            case "xp", "rpgmakerxp", "rpgxp", "rtpxp": return .xp
-            case "vx", "rpgmakervx", "rpgvx", "rtpvx": return .vx
-            case "vxace", "rpgmakervxace", "rpgvxace", "rtpvxace": return .vxAce
-            default: return nil
+        func variantFromName(_ name: String) -> RPGMakerRTPVariant? {
+            let t = token(name)
+            if t.contains("vxace") || t.contains("rpgvxace") || t == "rtp100" {
+                return .vxAce
             }
+            if t.contains("xp") && !t.contains("vx") {
+                return .xp
+            }
+            if t.contains("vx") {
+                return .vx
+            }
+            return nil
+        }
+
+        func variantFromAncestors(of url: URL) -> RPGMakerRTPVariant? {
+            let rootComponents = extractionRoot.standardizedFileURL.pathComponents
+            let components = url.standardizedFileURL.pathComponents
+            guard components.starts(with: rootComponents) else { return nil }
+            for name in components.dropFirst(rootComponents.count).reversed() {
+                if let variant = variantFromName(name) { return variant }
+            }
+            return nil
         }
 
         let rootDepth = extractionRoot.standardizedFileURL.pathComponents.count
@@ -1245,10 +1267,12 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             includingPropertiesForKeys: keys,
             options: [.skipsHiddenFiles]
         ) else { throw RTPStoreError.sourceUnreadable }
-        var discovered: [RPGMakerRTPVariant: URL] = [:]
+
+        var rootsByVariant: [RPGMakerRTPVariant: [URL]] = [:]
+        var unassigned: [URL] = []
         while let candidate = enumerator.nextObject() as? URL {
             let depth = candidate.standardizedFileURL.pathComponents.count - rootDepth
-            if depth > 4 {
+            if depth > 5 {
                 enumerator.skipDescendants()
                 continue
             }
@@ -1257,50 +1281,75 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                 enumerator.skipDescendants()
                 continue
             }
-            guard values.isDirectory == true,
-                  let variant = variantForWrapperName(candidate.lastPathComponent)
-            else { continue }
-            guard discovered[variant] == nil else {
-                throw RTPStoreError.ambiguousRPGMakerLayout
+            guard values.isDirectory == true else { continue }
+            if candidate.lastPathComponent.caseInsensitiveCompare("sys") == .orderedSame {
+                enumerator.skipDescendants()
+                continue
             }
-            discovered[variant] = try resolveRPGMakerRTPRoot(at: candidate)
+            let isApp = candidate.lastPathComponent.caseInsensitiveCompare("app") == .orderedSame
+            let isNamedGeneration = variantFromName(candidate.lastPathComponent) != nil
+            guard isApp || isNamedGeneration else { continue }
+            let contentRoot: URL
+            do {
+                contentRoot = try resolveRPGMakerRTPRoot(at: candidate)
+            } catch {
+                continue
+            }
             enumerator.skipDescendants()
+            if let variant = variantFromName(candidate.lastPathComponent)
+                ?? variantFromAncestors(of: contentRoot)
+                ?? variantFromAncestors(of: candidate) {
+                rootsByVariant[variant, default: []].append(contentRoot)
+            } else {
+                unassigned.append(contentRoot)
+            }
         }
 
-        if !discovered.isEmpty { return discovered }
-
-        // Also accept a ZIP containing only one RTP. In that case use its
-        // filename/wrapper name as the generation clue.
-        let contentRoot = try resolveRPGMakerRTPRoot(at: extractionRoot)
-        let clues = [
-            token(archiveURL.deletingPathExtension().lastPathComponent),
-            token(contentRoot.deletingLastPathComponent().lastPathComponent)
-        ]
-        var inferred: RPGMakerRTPVariant?
-        for clue in clues {
-            let candidate: RPGMakerRTPVariant?
-            if clue.contains("vxace") || clue == "rtp100" {
-                candidate = .vxAce
-            } else if clue.contains("xp") {
-                candidate = .xp
-            } else if clue.contains("vx") {
-                candidate = .vx
-            } else {
-                candidate = nil
+        func preferredRoot(in urls: [URL]) -> URL {
+            let unique = Array(Set(urls.map(\.standardizedFileURL)))
+            let apps = unique.filter {
+                $0.lastPathComponent.caseInsensitiveCompare("app") == .orderedSame
             }
-            guard let candidate else { continue }
-            if let inferred, inferred != candidate {
+            if apps.count == 1, let app = apps.first { return app }
+            return unique.min {
+                $0.pathComponents.count < $1.pathComponents.count
+            } ?? unique[0]
+        }
+
+        var discovered: [RPGMakerRTPVariant: URL] = [:]
+        for (variant, urls) in rootsByVariant {
+            discovered[variant] = preferredRoot(in: urls)
+        }
+
+        if discovered.isEmpty && unassigned.isEmpty {
+            unassigned = [try resolveRPGMakerRTPRoot(at: extractionRoot)]
+        }
+
+        if discovered.isEmpty {
+            let clues = [token(archiveURL.deletingPathExtension().lastPathComponent)]
+                + unassigned.map { token($0.deletingLastPathComponent().lastPathComponent) }
+            var inferred: RPGMakerRTPVariant?
+            var cluesConflict = false
+            for clue in clues {
+                guard let candidate = variantFromName(clue) else { continue }
+                if let current = inferred, current != candidate {
+                    cluesConflict = true
+                    break
+                }
+                inferred = candidate
+            }
+            if cluesConflict { inferred = nil }
+            if inferred == nil { inferred = variantHint }
+            guard let inferred, !unassigned.isEmpty else {
                 throw RTPStoreError.unidentifiedRPGMakerVariant
             }
-            inferred = candidate
+            discovered[inferred] = preferredRoot(in: unassigned)
         }
-        if inferred == nil, let variantHint {
-            inferred = variantHint
-        }
-        guard let inferred else {
+
+        guard !discovered.isEmpty else {
             throw RTPStoreError.unidentifiedRPGMakerVariant
         }
-        return [inferred: contentRoot]
+        return discovered
     }
 
     private func detectedRPGMakerRTPVariant(for game: ImportedGame) throws -> RPGMakerRTPVariant? {

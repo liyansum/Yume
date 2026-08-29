@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
@@ -200,7 +201,6 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 @implementation YumeAetherRuntimeView {
     AetherSession *_session;
     engine_handle_t _engine;
-    dispatch_queue_t _engineQueue;
     CADisplayLink *_displayLink;
     std::atomic<bool> _frameWorkPending;
     std::atomic<bool> _workerStopped;
@@ -219,10 +219,6 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
-        _engineQueue = dispatch_queue_create(
-            "com.yume.runtime.aetherkiri.engine",
-            DISPATCH_QUEUE_SERIAL
-        );
         _frameWorkPending.store(false);
         _workerStopped.store(false);
         _workerPaused.store(false);
@@ -244,20 +240,15 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         std::max<CGFloat>(1, std::round(CGRectGetWidth(self.bounds) * scale)));
     const uint32_t height = static_cast<uint32_t>(
         std::max<CGFloat>(1, std::round(CGRectGetHeight(self.bounds) * scale)));
-    dispatch_async(_engineQueue, ^{
-        if (_engine != nullptr && !_workerStopped.load()) {
-            (void)engine_set_surface_size(_engine, width, height);
-        }
-    });
+    if (_engine != nullptr && !_workerStopped.load()) {
+        (void)engine_set_surface_size(_engine, width, height);
+    }
 }
 
 - (int32_t)startEngine {
     if (_stopped || _session == nullptr) return -1;
     [self layoutIfNeeded];
-    __block int32_t startResult = -1;
-    dispatch_sync(_engineQueue, ^{
-        startResult = [self startEngineOnEngineQueue];
-    });
+    const int32_t startResult = [self startEngineOnEngineThread];
     if (startResult != 0) return startResult;
 
     _displayLink = [CADisplayLink displayLinkWithTarget:self
@@ -272,7 +263,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     return 0;
 }
 
-- (int32_t)startEngineOnEngineQueue {
+- (int32_t)startEngineOnEngineThread {
     if (_workerStopped.load() || _session == nullptr) return -1;
     if (_engine != nullptr) return 0;
 
@@ -322,6 +313,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (fontPath.length > 0) {
         (void)SetOption(_engine, "default_font", fontPath.fileSystemRepresentation);
     }
+    if (!_session->save_root.empty()) {
+        setenv("YUME_KIRIKIRI_SAVEDATA", _session->save_root.c_str(), 1);
+        AppendHostLog(_session, "start.savedata=" + _session->save_root);
+    }
 
     AppendHostLog(_session, "start.open-game-async.begin");
     result = engine_open_game_async(_engine, _session->content_root.c_str(), nullptr);
@@ -339,12 +334,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (void)displayLinkDidFire:(CADisplayLink *)link {
     if (_stopped || _paused || _workerStopped.load() || _workerPaused.load()) return;
-    if (_frameWorkPending.exchange(true)) return;
-    const CFTimeInterval timestamp = link.timestamp;
-    dispatch_async(_engineQueue, ^{
-        [self processEngineFrameAtTimestamp:timestamp];
-        _frameWorkPending.store(false);
-    });
+    [self processEngineFrameAtTimestamp:link.timestamp];
 }
 
 - (void)processEngineFrameAtTimestamp:(CFTimeInterval)timestamp {
@@ -460,13 +450,11 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (int32_t)pauseEngine {
     if (_stopped || _workerStopped.load()) return -1;
     if (_paused) return 0;
-    __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine != nullptr && !_workerStopped.load()) {
-            result = engine_pause(_engine);
-            if (result == ENGINE_RESULT_OK) _workerPaused.store(true);
-        }
-    });
+    engine_result_t result = ENGINE_RESULT_INVALID_STATE;
+    if (_engine != nullptr && !_workerStopped.load()) {
+        result = engine_pause(_engine);
+        if (result == ENGINE_RESULT_OK) _workerPaused.store(true);
+    }
     if (result == ENGINE_RESULT_OK) {
         _paused = YES;
         _displayLink.paused = YES;
@@ -478,16 +466,14 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (int32_t)resumeEngine {
     if (_stopped || _workerStopped.load()) return -1;
     if (!_paused) return 0;
-    __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine != nullptr && !_workerStopped.load()) {
-            result = engine_resume(_engine);
-            if (result == ENGINE_RESULT_OK) {
-                _workerPaused.store(false);
-                _lastTimestamp = 0;
-            }
+    engine_result_t result = ENGINE_RESULT_INVALID_STATE;
+    if (_engine != nullptr && !_workerStopped.load()) {
+        result = engine_resume(_engine);
+        if (result == ENGINE_RESULT_OK) {
+            _workerPaused.store(false);
+            _lastTimestamp = 0;
         }
-    });
+    }
     if (result == ENGINE_RESULT_OK) {
         _paused = NO;
         _displayLink.paused = NO;
@@ -498,45 +484,38 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (int32_t)sendKey:(int32_t)key pressed:(BOOL)pressed {
     if (_stopped || _workerStopped.load() || key == 0) return -1;
-    __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
-        engine_input_event_t event{};
-        event.struct_size = sizeof(event);
-        event.type = pressed ? ENGINE_INPUT_EVENT_KEY_DOWN : ENGINE_INPUT_EVENT_KEY_UP;
-        event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
-        event.key_code = key;
-        result = engine_send_input(_engine, &event);
-    });
-    return static_cast<int32_t>(result);
+    if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return -1;
+    engine_input_event_t event{};
+    event.struct_size = sizeof(event);
+    event.type = pressed ? ENGINE_INPUT_EVENT_KEY_DOWN : ENGINE_INPUT_EVENT_KEY_UP;
+    event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
+    event.key_code = key;
+    return static_cast<int32_t>(engine_send_input(_engine, &event));
 }
 
 - (int32_t)sendText:(const char *)text {
     if (_stopped || _workerStopped.load() || text == nullptr) return -1;
     NSString *string = [NSString stringWithUTF8String:text];
     if (string == nil) return -1;
+    if (_engine == nullptr || !_startupResolved || _workerStopped.load()) {
+        return static_cast<int32_t>(ENGINE_RESULT_INVALID_STATE);
+    }
     __block engine_result_t result = ENGINE_RESULT_OK;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine == nullptr || !_startupResolved || _workerStopped.load()) {
-            result = ENGINE_RESULT_INVALID_STATE;
-            return;
-        }
-        [string enumerateSubstringsInRange:NSMakeRange(0, string.length)
-                                   options:NSStringEnumerationByComposedCharacterSequences
-                                usingBlock:^(NSString *substring, NSRange, NSRange, BOOL *stop) {
-            NSData *utf32 = [substring dataUsingEncoding:NSUTF32LittleEndianStringEncoding];
-            if (utf32.length < sizeof(uint32_t)) return;
-            uint32_t scalar = 0;
-            [utf32 getBytes:&scalar length:sizeof(scalar)];
-            engine_input_event_t event{};
-            event.struct_size = sizeof(event);
-            event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
-            event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
-            event.unicode_codepoint = scalar;
-            result = engine_send_input(_engine, &event);
-            if (result != ENGINE_RESULT_OK) *stop = YES;
-        }];
-    });
+    [string enumerateSubstringsInRange:NSMakeRange(0, string.length)
+                               options:NSStringEnumerationByComposedCharacterSequences
+                            usingBlock:^(NSString *substring, NSRange, NSRange, BOOL *stop) {
+        NSData *utf32 = [substring dataUsingEncoding:NSUTF32LittleEndianStringEncoding];
+        if (utf32.length < sizeof(uint32_t)) return;
+        uint32_t scalar = 0;
+        [utf32 getBytes:&scalar length:sizeof(scalar)];
+        engine_input_event_t event{};
+        event.struct_size = sizeof(event);
+        event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
+        event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
+        event.unicode_codepoint = scalar;
+        result = engine_send_input(_engine, &event);
+        if (result != ENGINE_RESULT_OK) *stop = YES;
+    }];
     return static_cast<int32_t>(result);
 }
 
@@ -557,21 +536,17 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (_stopped || _workerStopped.load()) return -1;
     const CGPoint viewPoint = CGPointMake(x, y);
     const CGSize viewSize = self.bounds.size;
-    __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
-        CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
-        engine_input_event_t event{};
-        event.struct_size = sizeof(event);
-        event.type = pressed ? ENGINE_INPUT_EVENT_POINTER_DOWN : ENGINE_INPUT_EVENT_POINTER_UP;
-        event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
-        event.x = point.x;
-        event.y = point.y;
-        event.pointer_id = 0;
-        event.button = 1;
-        result = engine_send_input(_engine, &event);
-    });
-    return static_cast<int32_t>(result);
+    if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return -1;
+    CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
+    engine_input_event_t event{};
+    event.struct_size = sizeof(event);
+    event.type = pressed ? ENGINE_INPUT_EVENT_POINTER_DOWN : ENGINE_INPUT_EVENT_POINTER_UP;
+    event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
+    event.x = point.x;
+    event.y = point.y;
+    event.pointer_id = 0;
+    event.button = 1;
+    return static_cast<int32_t>(engine_send_input(_engine, &event));
 }
 
 - (void)sendTouch:(UITouch *)touch type:(uint32_t)type {
@@ -583,20 +558,18 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         reinterpret_cast<uintptr_t>((__bridge void *)touch) & 0x7fffffff
     );
     const BOOL cancelled = touch.phase == UITouchPhaseCancelled;
-    dispatch_async(_engineQueue, ^{
-        if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
-        CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
-        engine_input_event_t event{};
-        event.struct_size = sizeof(event);
-        event.type = type;
-        event.timestamp_micros = timestamp;
-        event.x = point.x;
-        event.y = point.y;
-        event.pointer_id = pointerID;
-        event.button = 1;
-        if (cancelled) event.modifiers = ENGINE_INPUT_MODIFIER_POINTER_CANCEL;
-        (void)engine_send_input(_engine, &event);
-    });
+    if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
+    CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
+    engine_input_event_t event{};
+    event.struct_size = sizeof(event);
+    event.type = type;
+    event.timestamp_micros = timestamp;
+    event.x = point.x;
+    event.y = point.y;
+    event.pointer_id = pointerID;
+    event.button = 1;
+    if (cancelled) event.modifiers = ENGINE_INPUT_MODIFIER_POINTER_CANCEL;
+    (void)engine_send_input(_engine, &event);
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
@@ -619,15 +592,13 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     [_displayLink invalidate];
     _displayLink = nil;
     self.layer.contents = nil;
-    dispatch_sync(_engineQueue, ^{
-        if (_engine != nullptr) {
-            [self drainEngineLogs];
-            AppendHostLog(_session, "stop.engine-destroy.begin");
-            (void)engine_destroy(_engine);
-            _engine = nullptr;
-            AppendHostLog(_session, "stop.engine-destroy.end");
-        }
-    });
+    if (_engine != nullptr) {
+        [self drainEngineLogs];
+        AppendHostLog(_session, "stop.engine-destroy.begin");
+        (void)engine_destroy(_engine);
+        _engine = nullptr;
+        AppendHostLog(_session, "stop.engine-destroy.end");
+    }
     if (_session != nullptr) {
         _session->stopped.store(true);
         Emit(_session, YUME_RUNTIME_EVENT_STOPPED, "aether.stopped");

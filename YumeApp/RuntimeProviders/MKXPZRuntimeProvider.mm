@@ -103,18 +103,54 @@ static MKXPRubyGeneration DetectRubyGeneration(NSString *root) {
             return MKXPRubyGeneration::Ruby31;
         }
     }
-    bool hasVXAceArchive = false;
-    for (NSString *entry in [files contentsOfDirectoryAtPath:root error:nil] ?: @[]) {
-        if ([[entry.pathExtension lowercaseString] isEqualToString:@"rgss3a"]) {
-            hasVXAceArchive = true;
-            break;
+
+    for (NSString *iniName in @[@"Game.ini", @"game.ini"]) {
+        NSString *iniPath = [root stringByAppendingPathComponent:iniName];
+        NSString *ini = [NSString stringWithContentsOfFile:iniPath
+                                                 encoding:NSUTF8StringEncoding
+                                                    error:nil];
+        if (ini.length == 0) {
+            ini = [NSString stringWithContentsOfFile:iniPath
+                                           encoding:NSShiftJISStringEncoding
+                                              error:nil];
+        }
+        NSString *lower = ini.lowercaseString;
+        if ([lower containsString:@"rgss3"] || [lower containsString:@"rgss300"] ||
+            [lower containsString:@"rgss301"]) {
+            return MKXPRubyGeneration::Ruby19;
+        }
+        if ([lower containsString:@"rgss2"] || [lower containsString:@"rgss200"] ||
+            [lower containsString:@"rgss202"]) {
+            return MKXPRubyGeneration::Ruby18;
         }
     }
-    if (hasVXAceArchive ||
-        [files fileExistsAtPath:[root stringByAppendingPathComponent:@"Data/Scripts.rvdata2"]] ||
-        [files fileExistsAtPath:[root stringByAppendingPathComponent:@"data/scripts.rvdata2"]]) {
-        return MKXPRubyGeneration::Ruby19;
+
+    NSURL *rootURL = [NSURL fileURLWithPath:root isDirectory:YES];
+    NSDirectoryEnumerator *enumerator = [files enumeratorAtURL:rootURL
+                                    includingPropertiesForKeys:@[NSURLIsRegularFileKey]
+                                                       options:NSDirectoryEnumerationSkipsHiddenFiles
+                                                  errorHandler:nil];
+    NSInteger foundVXAce = 0;
+    NSInteger foundClassic = 0;
+    const NSUInteger rootDepth = rootURL.pathComponents.count;
+    for (NSURL *file in enumerator) {
+        NSUInteger depth = file.pathComponents.count - rootDepth;
+        if (depth > 4) {
+            [enumerator skipDescendants];
+            continue;
+        }
+        NSString *name = file.lastPathComponent.lowercaseString;
+        NSString *ext = file.pathExtension.lowercaseString;
+        if ([ext isEqualToString:@"rgss3a"] || [name isEqualToString:@"scripts.rvdata2"]) {
+            foundVXAce += 1;
+        } else if ([ext isEqualToString:@"rgss2a"] || [ext isEqualToString:@"rgssad"] ||
+                   [name isEqualToString:@"scripts.rvdata"] ||
+                   [name isEqualToString:@"scripts.rxdata"]) {
+            foundClassic += 1;
+        }
+        if (foundVXAce > 0 && foundClassic > 0) break;
     }
+    if (foundVXAce > 0) return MKXPRubyGeneration::Ruby19;
     return MKXPRubyGeneration::Ruby18;
 }
 
