@@ -11,11 +11,19 @@ static CALayer *HostNativeLayer(void) {
     return pointer != nullptr ? (__bridge CALayer *)pointer : nil;
 }
 
+static UIScreen *HostScreen(void) {
+    void *windowPointer = mkxp_getHostUIWindow();
+    if (windowPointer != nullptr) {
+        UIWindow *window = (__bridge UIWindow *)windowPointer;
+        if (window.screen != nil) return window.screen;
+    }
+    return UIScreen.mainScreen;
+}
+
 extern "C" void *mkxp_getANGLENativeLayer(void *sdlWindow) {
     CALayer *hostLayer = HostNativeLayer();
     if (hostLayer != nil) {
-        UIScreen *screen = hostLayer.window.screen ?: UIScreen.mainScreen;
-        hostLayer.contentsScale = screen.nativeScale;
+        hostLayer.contentsScale = HostScreen().nativeScale;
         return (__bridge void *)hostLayer;
     }
 
@@ -72,7 +80,7 @@ extern "C" void mkxp_refreshANGLENativeLayerSize(void *sdlWindow,
 
     dispatch_block_t work = ^{
         CALayer *parentLayer = HostNativeLayer();
-        CGFloat scale = UIScreen.mainScreen.nativeScale;
+        CGFloat scale = HostScreen().nativeScale;
         if (parentLayer == nil) {
             SDL_SysWMinfo wmInfo;
             SDL_VERSION(&wmInfo.version);
@@ -81,8 +89,6 @@ extern "C" void mkxp_refreshANGLENativeLayerSize(void *sdlWindow,
             UIWindow *uiWindow = wmInfo.info.uikit.window;
             parentLayer = uiWindow.rootViewController.view.layer;
             scale = uiWindow.screen.nativeScale;
-        } else if (parentLayer.window.screen != nil) {
-            scale = parentLayer.window.screen.nativeScale;
         }
         if (parentLayer == nil) return;
 

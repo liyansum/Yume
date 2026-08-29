@@ -1,7 +1,7 @@
 # Yume 当前任务状态
 
 > 当前任务：修复 IPA 链接失败、Kirikiri SIGABRT、Ren'Py pyobjus，并加入每游戏 7.x/8.x 选择
-> 状态：代码已完成，待编译 IPA（build 9）
+> 状态：代码已完成，待编译 IPA（build 10）
 > 最后更新：2026-08-30
 
 ## 根因
