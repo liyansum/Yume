@@ -1,4 +1,3 @@
-#if DEBUG
 import SwiftUI
 import YumeApplication
 import YumeDomain
@@ -120,4 +119,3 @@ private extension EngineHostingKind {
         }
     }
 }
-#endif

@@ -5,9 +5,9 @@ struct GameGridItem: View {
     let game: ImportedGame
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GameArtworkPlaceholder(gameID: game.id)
-                .aspectRatio(3 / 4, contentMode: .fit)
+        VStack(alignment: .leading, spacing: 11) {
+            GameArtworkPlaceholder(gameID: game.id, engineName: game.engine.displayName)
+                .aspectRatio(16 / 10, contentMode: .fit)
 
             Text(game.title)
                 .font(.headline)
@@ -22,6 +22,13 @@ struct GameGridItem: View {
             }
             .foregroundStyle(.secondary)
         }
+        .padding(10)
+        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.primary.opacity(0.06), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
         .accessibilityElement(children: .combine)
     }
 }
@@ -31,8 +38,8 @@ struct GameListItem: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            GameArtworkPlaceholder(gameID: game.id)
-                .frame(width: 64, height: 84)
+            GameArtworkPlaceholder(gameID: game.id, engineName: game.engine.displayName)
+                .frame(width: 76, height: 58)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(game.title)
@@ -57,6 +64,7 @@ struct GameListItem: View {
 
 private struct GameArtworkPlaceholder: View {
     let gameID: GameID
+    let engineName: String
 
     private var hue: Double {
         let bytes = gameID.rawValue.uuid
@@ -75,12 +83,25 @@ private struct GameArtworkPlaceholder: View {
             )
 
             Image(systemName: "gamecontroller")
-                .font(.system(size: 32, weight: .light))
+                .font(.system(size: 30, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.8))
+
+            VStack {
+                Spacer()
+                HStack {
+                    Text(engineName)
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .foregroundStyle(.white.opacity(0.88))
+                .padding(8)
+                .background(.black.opacity(0.18))
+            }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(.white.opacity(0.1), lineWidth: 0.5)
         }
         .accessibilityHidden(true)

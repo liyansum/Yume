@@ -2,9 +2,11 @@
 #import <UIKit/UIKit.h>
 
 #include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <new>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "../../YumeCore/Sources/CYumeRuntimeBridge/include/CYumeRuntimeBridge.h"
@@ -20,6 +22,7 @@ struct MKXPSession;
 @interface YumeMKXPHostView : UIView
 - (instancetype)initWithSession:(MKXPSession *)session;
 - (void)beginEmbedding;
+- (BOOL)embedIfAvailable;
 - (void)detachSession;
 @end
 
@@ -33,6 +36,7 @@ struct MKXPSession {
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
     std::mutex callbackMutex;
+    std::mutex logMutex;
     __strong YumeMKXPHostView *view = nil;
     std::atomic<bool> running{false};
     std::atomic<bool> everStarted{false};
@@ -40,6 +44,32 @@ struct MKXPSession {
     std::atomic<bool> destroyRequested{false};
     std::atomic<bool> stoppedEventSent{false};
 };
+
+static void AppendMKXPHostLog(MKXPSession *session, const char *message) {
+    if (session == nullptr || session->logRoot.empty()) return;
+    std::lock_guard<std::mutex> lock(session->logMutex);
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
+        if (root == nil) return;
+        [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        NSString *path = [root stringByAppendingPathComponent:@"mkxp-host.log"];
+        FILE *file = fopen(path.fileSystemRepresentation, "ab");
+        if (file == nullptr) return;
+        NSString *detail = message != nullptr
+            ? ([NSString stringWithUTF8String:message] ?: @"<invalid utf8>")
+            : @"";
+        NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
+                          NSDate.date.timeIntervalSince1970, detail];
+        NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        if (data != nil) fwrite(data.bytes, 1, data.length, file);
+        fflush(file);
+        fsync(fileno(file));
+        fclose(file);
+    }
+}
 
 static std::mutex gMKXPClaimMutex;
 static bool gMKXPClaimed = false;
@@ -145,8 +175,14 @@ static void ConfigureMKXP(MKXPSession *session) {
 }
 
 static void MKXPFirstFrame(void *context) {
-    MKXPEmit(static_cast<MKXPSession *>(context), YUME_RUNTIME_EVENT_FIRST_FRAME,
-             "mkxp.first-frame");
+    auto *session = static_cast<MKXPSession *>(context);
+    AppendMKXPHostLog(session, "frame.first-frame");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (session != nullptr && session->view != nil) {
+            [session->view embedIfAvailable];
+        }
+    });
+    MKXPEmit(session, YUME_RUNTIME_EVENT_FIRST_FRAME, "mkxp.first-frame");
 }
 static void MKXPPaused(void *context) {
     MKXPEmit(static_cast<MKXPSession *>(context), YUME_RUNTIME_EVENT_PAUSED,
@@ -162,13 +198,21 @@ static void MKXPTerminated(void *context) {
         MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped");
     }
 }
-static void MKXPError(const char *, void *context) {
-    MKXPEmit(static_cast<MKXPSession *>(context), YUME_RUNTIME_EVENT_FAILED,
-             "mkxp.engine-error");
+static void MKXPError(const char *message, void *context) {
+    auto *session = static_cast<MKXPSession *>(context);
+    std::string detail = "engine.error ";
+    detail += message != nullptr ? message : "<no detail>";
+    AppendMKXPHostLog(session, detail.c_str());
+    MKXPEmit(session, YUME_RUNTIME_EVENT_FAILED, detail.c_str());
+    mkxp_signalErrorDismissed();
 }
-static void MKXPInfo(const char *, void *context) {
-    MKXPEmit(static_cast<MKXPSession *>(context), YUME_RUNTIME_EVENT_WARNING,
-             "mkxp.engine-message");
+static void MKXPInfo(const char *message, void *context) {
+    auto *session = static_cast<MKXPSession *>(context);
+    std::string detail = "engine.message ";
+    detail += message != nullptr ? message : "<no detail>";
+    AppendMKXPHostLog(session, detail.c_str());
+    MKXPEmit(session, YUME_RUNTIME_EVENT_WARNING, detail.c_str());
+    mkxp_signalInfoDismissed();
 }
 
 @implementation YumeMKXPHostView {
@@ -200,11 +244,16 @@ static void MKXPInfo(const char *, void *context) {
         _embeddedGameView.frame = self.bounds;
         return;
     }
+    if ([self embedIfAvailable]) link.paused = YES;
+}
+
+- (BOOL)embedIfAvailable {
+    if (_embeddedGameView != nil) return YES;
     void *windowPointer = mkxp_getSDLUIKitWindow();
-    if (windowPointer == nullptr) return;
+    if (windowPointer == nullptr) return NO;
     UIWindow *window = (__bridge UIWindow *)windowPointer;
     UIView *gameView = window.rootViewController.view;
-    if (gameView == nil) return;
+    if (gameView == nil) return NO;
     [gameView removeFromSuperview];
     gameView.frame = self.bounds;
     gameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
@@ -213,7 +262,8 @@ static void MKXPInfo(const char *, void *context) {
     window.hidden = YES;
     _embeddedGameView = gameView;
     _sdlWindow = window;
-    link.paused = YES;
+    AppendMKXPHostLog(_session, "view.embedded");
+    return YES;
 }
 
 - (void)layoutSubviews {
@@ -279,6 +329,18 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
     session->callbackContext = context;
     NSString *root = [NSString stringWithUTF8String:session->contentRoot.c_str()];
     session->ruby = DetectRubyGeneration(root);
+    AppendMKXPHostLog(session, "session.created");
+    AppendMKXPHostLog(session, session->ruby == MKXPRubyGeneration::Ruby19
+        ? "ruby.detected=1.9 (RGSS3/VX Ace)"
+        : session->ruby == MKXPRubyGeneration::Ruby18
+            ? "ruby.detected=1.8 (RGSS1/2)"
+            : "ruby.detected=3.1");
+    std::string rtpCount = "rtp.mount-count=" + std::to_string(session->rtpRoots.size());
+    AppendMKXPHostLog(session, rtpCount.c_str());
+    for (const auto &rtpRoot : session->rtpRoots) {
+        std::string line = "rtp.mount=" + rtpRoot;
+        AppendMKXPHostLog(session, line.c_str());
+    }
     session->view = [[YumeMKXPHostView alloc] initWithSession:session];
     if (session->view == nil) {
         delete session;
@@ -293,7 +355,9 @@ static int32_t MKXPStart(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || session->view == nil || session->running.exchange(true)) return -1;
     mkxp_resetSessionState();
+    AppendMKXPHostLog(session, "start.reset-complete");
     ConfigureMKXP(session);
+    AppendMKXPHostLog(session, "start.configured");
     mkxp_setFrameRenderedCallback(MKXPFirstFrame, session);
     mkxp_setPausedCallback(MKXPPaused, session);
     mkxp_setResumedCallback(MKXPResumed, session);
@@ -301,6 +365,7 @@ static int32_t MKXPStart(void *opaque) {
     mkxp_setErrorMessageCallback(MKXPError, session);
     mkxp_setInfoMessageCallback(MKXPInfo, session);
     mkxp_setGamePath(session->contentRoot.c_str());
+    AppendMKXPHostLog(session, "start.game-path-set");
     session->everStarted.store(true);
     [session->view beginEmbedding];
     MKXPEmit(session, YUME_RUNTIME_EVENT_STARTED, "mkxp.started");
@@ -310,6 +375,7 @@ static int32_t MKXPStart(void *opaque) {
         char executable[] = "yume-mkxp-z";
         char *arguments[] = {executable, nullptr};
         (void)SDL_main(1, arguments);
+        AppendMKXPHostLog(session, "engine.main-returned");
         session->mainReturned.store(true);
         session->running.store(false);
         [session->view detachSession];

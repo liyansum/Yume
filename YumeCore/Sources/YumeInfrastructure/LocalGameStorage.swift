@@ -2,7 +2,7 @@ import Foundation
 import YumeApplication
 import YumeDomain
 
-public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvider, GameMaintenance, GameSaveTransfer, GameRuntimePackageStore {
+public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvider, GameMaintenance, GameSaveTransfer, GameSaveLibraryManaging, GameRuntimePackageStore {
     public struct VolumeCapacity: Sendable, Equatable {
         public let availableByteCount: Int64
         public let totalByteCount: Int64
@@ -22,6 +22,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         public let cache: URL
         public let diagnostics: URL
         public let detachedSaves: URL
+        public let saveLibraries: URL
         public let rtp: URL
 
         fileprivate init(root: URL) {
@@ -31,6 +32,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             self.cache = root.appendingPathComponent("Cache", isDirectory: true)
             self.diagnostics = root.appendingPathComponent("Diagnostics", isDirectory: true)
             self.detachedSaves = root.appendingPathComponent("DetachedSaves", isDirectory: true)
+            self.saveLibraries = root.appendingPathComponent("SaveLibraries", isDirectory: true)
             self.rtp = root.appendingPathComponent("RTP", isDirectory: true)
         }
     }
@@ -57,6 +59,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         case corruptGameManifest
         case unsupportedGameManifestVersion(Int)
         case detachedSavesAlreadyExist
+        case corruptSaveLibraryManifest
     }
 
     public nonisolated let layout: Layout
@@ -66,6 +69,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
     private static let originalDirectoryName = "original"
     private static let derivedDirectoryName = "derived"
     private static let savesDirectoryName = "saves"
+    private static let saveFilesDirectoryName = "files"
     private static let logsDirectoryName = "logs"
     private static let maximumSourceEntryCount = 250_000
     private static let maximumRelativePathByteCount = 1_024
@@ -98,6 +102,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         try ensureManagedDirectory(layout.cache, excludedFromBackup: true)
         try ensureManagedDirectory(layout.diagnostics, excludedFromBackup: true)
         try ensureManagedDirectory(layout.detachedSaves, excludedFromBackup: false)
+        try ensureManagedDirectory(layout.saveLibraries, excludedFromBackup: false)
         try ensureManagedDirectory(layout.rtp, excludedFromBackup: true)
     }
 
@@ -401,6 +406,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         guard isReplacement || !fileManager.fileExists(atPath: destination.path) else {
             throw StorageError.gameAlreadyExists
         }
+        var committedManifest = manifest
         if isReplacement {
             guard fileManager.fileExists(atPath: destination.path) else {
                 throw StorageError.corruptGameManifest
@@ -409,6 +415,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             guard existingManifest.game.engine.id == manifest.game.engine.id else {
                 throw StorageError.corruptGameManifest
             }
+            committedManifest.saveLibraryID = existingManifest.saveLibraryID
         }
 
         try ensureManagedDirectory(
@@ -436,7 +443,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             to: saves
         )
         try makeTreeReadOnly(at: original)
-        try writeGameManifest(manifest, to: content.appendingPathComponent(Self.manifestFileName))
+        try writeGameManifest(committedManifest, to: content.appendingPathComponent(Self.manifestFileName))
         if isReplacement {
             let backup = taskRootURL(for: taskID).appendingPathComponent(
                 "replacement-backup",
@@ -500,34 +507,18 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         try validateExistingManagedDirectory(layout.root)
         try validateExistingManagedDirectory(layout.games)
         try validateExistingManagedDirectory(root)
-        let manifest = try loadGameManifest(at: root)
+        let save = try ensureSaveLibrary(for: root)
         makeTreeWritable(at: root)
-        if policy == .preserveSaves {
-            let saves = root.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
-            if fileManager.fileExists(atPath: saves.path), !(try scannedEntries(at: saves)).isEmpty {
-                let detachedRoot = detachedSaveRootURL(for: id)
-                guard !fileManager.fileExists(atPath: detachedRoot.path) else {
-                    throw StorageError.detachedSavesAlreadyExist
-                }
-                try ensureManagedDirectory(detachedRoot, excludedFromBackup: false)
-                try fileManager.moveItem(
-                    at: saves,
-                    to: detachedRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
-                )
-                let detachedManifest = DetachedSaveManifest(
-                    game: manifest.game,
-                    detachedAt: Date()
-                )
-                try writeDetachedSaveManifest(detachedManifest, at: detachedRoot)
-            }
-        }
         try fileManager.removeItem(at: root)
+        if policy == .deleteSaves {
+            try fileManager.removeItem(at: saveLibraryRootURL(for: save.library.id))
+        }
     }
 
     public func storageBreakdown(for id: GameID) async throws -> GameStorageBreakdown {
         try await prepareStorage()
         let root = gameRootURL(for: id)
-        _ = try loadGameManifest(at: root)
+        let save = try ensureSaveLibrary(for: root)
         return GameStorageBreakdown(
             gameID: id,
             originalByteCount: try byteCountOfDirectory(
@@ -536,9 +527,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             derivedByteCount: try byteCountOfDirectory(
                 root.appendingPathComponent(Self.derivedDirectoryName, isDirectory: true)
             ),
-            saveByteCount: try byteCountOfDirectory(
-                root.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
-            ),
+            saveByteCount: try byteCountOfDirectory(save.filesURL),
             logByteCount: try byteCountOfDirectory(
                 root.appendingPathComponent(Self.logsDirectoryName, isDirectory: true)
             )
@@ -553,13 +542,139 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         try writeGameManifest(manifest, to: root.appendingPathComponent(Self.manifestFileName))
     }
 
+    public func renameGame(id: GameID, title: String) async throws {
+        try await prepareStorage()
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw SaveLibraryError.invalidTitle }
+        let root = gameRootURL(for: id)
+        var manifest = try loadGameManifest(at: root)
+        let previousTitle = manifest.game.title
+        manifest.game.title = String(trimmed.prefix(120))
+        try writeGameManifest(manifest, to: root.appendingPathComponent(Self.manifestFileName))
+
+        if let saveID = manifest.saveLibraryID {
+            var saveManifest = try loadSaveLibraryManifest(id: saveID)
+            if saveManifest.title == previousTitle {
+                saveManifest.title = manifest.game.title
+                saveManifest.modifiedAt = Date()
+                try writeSaveLibraryManifest(saveManifest)
+            }
+        }
+    }
+
+    public func saveLibraries() async throws -> [GameSaveLibrary] {
+        try await prepareStorage()
+        let roots = try fileManager.contentsOfDirectory(
+            at: layout.games,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        for root in roots where UUID(uuidString: root.lastPathComponent) != nil {
+            _ = try ensureSaveLibrary(for: root)
+        }
+
+        let bindings = try saveLibraryBindings()
+        return try loadAllSaveLibraryManifests().map { manifest in
+            GameSaveLibrary(
+                id: manifest.id,
+                title: manifest.title,
+                engine: manifest.engine,
+                contentFingerprint: manifest.contentFingerprint,
+                createdAt: manifest.createdAt,
+                modifiedAt: manifest.modifiedAt,
+                byteCount: try byteCountOfDirectory(saveLibraryFilesURL(for: manifest.id)),
+                boundGameID: bindings[manifest.id]
+            )
+        }.sorted {
+            if ($0.boundGameID != nil) != ($1.boundGameID != nil) {
+                return $0.boundGameID != nil
+            }
+            return $0.modifiedAt > $1.modifiedAt
+        }
+    }
+
+    public func saveLibrary(for gameID: GameID) async throws -> GameSaveLibrary {
+        try await prepareStorage()
+        let root = gameRootURL(for: gameID)
+        guard fileManager.fileExists(atPath: root.path) else {
+            throw SaveLibraryError.gameNotFound
+        }
+        let ensured = try ensureSaveLibrary(for: root)
+        return GameSaveLibrary(
+            id: ensured.library.id,
+            title: ensured.library.title,
+            engine: ensured.library.engine,
+            contentFingerprint: ensured.library.contentFingerprint,
+            createdAt: ensured.library.createdAt,
+            modifiedAt: ensured.library.modifiedAt,
+            byteCount: try byteCountOfDirectory(ensured.filesURL),
+            boundGameID: gameID
+        )
+    }
+
+    public func bindSaveLibrary(
+        _ saveLibraryID: SaveLibraryID,
+        to gameID: GameID
+    ) async throws {
+        try await prepareStorage()
+        let gameRoot = gameRootURL(for: gameID)
+        guard fileManager.fileExists(atPath: gameRoot.path) else {
+            throw SaveLibraryError.gameNotFound
+        }
+        _ = try ensureSaveLibrary(for: gameRoot)
+        var gameManifest = try loadGameManifest(at: gameRoot)
+        let saveManifest: SaveLibraryManifest
+        do {
+            saveManifest = try loadSaveLibraryManifest(id: saveLibraryID)
+        } catch {
+            throw SaveLibraryError.saveLibraryNotFound
+        }
+        guard saveManifest.engine == gameManifest.game.engine else {
+            throw SaveLibraryError.engineMismatch
+        }
+        if let existing = try saveLibraryBindings()[saveLibraryID], existing != gameID {
+            throw SaveLibraryError.alreadyBound(existing)
+        }
+        gameManifest.saveLibraryID = saveLibraryID
+        try writeGameManifest(
+            gameManifest,
+            to: gameRoot.appendingPathComponent(Self.manifestFileName)
+        )
+    }
+
+    public func deleteSaveLibrary(id: SaveLibraryID) async throws {
+        try await prepareStorage()
+        if let gameID = try saveLibraryBindings()[id] {
+            let gameRoot = gameRootURL(for: gameID)
+            var gameManifest = try loadGameManifest(at: gameRoot)
+            let replacementID = SaveLibraryID()
+            try ensureManagedDirectory(saveLibraryRootURL(for: replacementID), excludedFromBackup: false)
+            try ensureManagedDirectory(saveLibraryFilesURL(for: replacementID), excludedFromBackup: false)
+            try writeSaveLibraryManifest(
+                SaveLibraryManifest(id: replacementID, game: gameManifest.game)
+            )
+            gameManifest.saveLibraryID = replacementID
+            try writeGameManifest(
+                gameManifest,
+                to: gameRoot.appendingPathComponent(Self.manifestFileName)
+            )
+        }
+        let root = saveLibraryRootURL(for: id)
+        guard fileManager.fileExists(atPath: root.path) else {
+            throw SaveLibraryError.saveLibraryNotFound
+        }
+        makeTreeWritable(at: root)
+        try fileManager.removeItem(at: root)
+    }
+
     public func contentLocation(for id: GameID) async throws -> GameContentLocation {
         try await prepareStorage()
         let gameRoot = gameRootURL(for: id)
         guard fileManager.fileExists(atPath: gameRoot.path) else {
             throw GameContentError.gameNotFound
         }
-        let manifest = try loadGameManifest(at: gameRoot)
+        let ensured = try ensureSaveLibrary(for: gameRoot)
+        let manifest = ensured.manifest
 
         var contentRoot = gameRoot.appendingPathComponent(
             manifest.contentRoot.rawValue,
@@ -580,7 +695,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         return GameContentLocation(
             game: manifest.game,
             rootURL: contentRoot,
-            saveRootURL: gameRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true),
+            saveRootURL: ensured.filesURL,
             derivedRootURL: gameRoot.appendingPathComponent(Self.derivedDirectoryName, isDirectory: true),
             logRootURL: gameRoot.appendingPathComponent(Self.logsDirectoryName, isDirectory: true),
             webEntryPoint: entryPoint,
@@ -594,8 +709,9 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         guard fileManager.fileExists(atPath: gameRoot.path) else {
             throw SaveTransferError.gameNotFound
         }
-        let manifest = try loadGameManifest(at: gameRoot)
-        let saveRoot = gameRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
+        let ensured = try ensureSaveLibrary(for: gameRoot)
+        let manifest = ensured.manifest
+        let saveRoot = ensured.filesURL
         let entries = try scannedEntries(at: saveRoot).filter { !$0.isDirectory }
         guard entries.count <= Self.maximumSaveTransferFileCount else {
             throw SaveTransferError.tooManyFiles
@@ -644,7 +760,8 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         guard fileManager.fileExists(atPath: gameRoot.path) else {
             throw SaveTransferError.gameNotFound
         }
-        let gameManifest = try loadGameManifest(at: gameRoot)
+        let ensured = try ensureSaveLibrary(for: gameRoot)
+        let gameManifest = ensured.manifest
         let packageData = try Data(contentsOf: packageURL, options: [.mappedIfSafe])
         guard packageData.count <= Self.maximumSaveTransferByteCount * 2 else {
             throw SaveTransferError.packageTooLarge
@@ -696,12 +813,15 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                 try file.data.write(to: destination, options: [.atomic])
             }
 
-            let saves = gameRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
+            let saves = ensured.filesURL
             try fileManager.moveItem(at: saves, to: backup)
             do {
                 try fileManager.moveItem(at: replacement, to: saves)
                 try fileManager.removeItem(at: backup)
                 try? fileManager.removeItem(at: transactionRoot)
+                var saveManifest = ensured.library
+                saveManifest.modifiedAt = Date()
+                try writeSaveLibraryManifest(saveManifest)
             } catch {
                 if !fileManager.fileExists(atPath: saves.path) {
                     try? fileManager.moveItem(at: backup, to: saves)
@@ -1003,6 +1123,20 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         layout.games.appendingPathComponent(id.rawValue.uuidString.lowercased(), isDirectory: true)
     }
 
+    private func saveLibraryRootURL(for id: SaveLibraryID) -> URL {
+        layout.saveLibraries.appendingPathComponent(
+            id.rawValue.uuidString.lowercased(),
+            isDirectory: true
+        )
+    }
+
+    private func saveLibraryFilesURL(for id: SaveLibraryID) -> URL {
+        saveLibraryRootURL(for: id).appendingPathComponent(
+            Self.saveFilesDirectoryName,
+            isDirectory: true
+        )
+    }
+
     private func detachedSaveRootURL(for id: GameID) -> URL {
         layout.detachedSaves.appendingPathComponent(
             id.rawValue.uuidString.lowercased(),
@@ -1098,6 +1232,28 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             self.formatVersion = Self.currentFormatVersion
             self.game = game
             self.detachedAt = detachedAt
+        }
+    }
+
+    private struct SaveLibraryManifest: Codable {
+        static let currentFormatVersion = 1
+
+        let formatVersion: Int
+        let id: SaveLibraryID
+        var title: String
+        let engine: EngineDescriptor
+        let contentFingerprint: String?
+        let createdAt: Date
+        var modifiedAt: Date
+
+        init(id: SaveLibraryID, game: ImportedGame, date: Date = Date()) {
+            self.formatVersion = Self.currentFormatVersion
+            self.id = id
+            self.title = game.title
+            self.engine = game.engine
+            self.contentFingerprint = game.contentFingerprint
+            self.createdAt = date
+            self.modifiedAt = date
         }
     }
 
@@ -1348,6 +1504,164 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             return root
         }
         return nil
+    }
+
+    private func ensureSaveLibrary(
+        for gameRoot: URL
+    ) throws -> (manifest: GameManifest, library: SaveLibraryManifest, filesURL: URL) {
+        var gameManifest = try loadGameManifest(at: gameRoot)
+
+        if let id = gameManifest.saveLibraryID {
+            let saveManifest = try loadSaveLibraryManifest(id: id)
+            guard saveManifest.engine.id == gameManifest.game.engine.id else {
+                throw StorageError.corruptSaveLibraryManifest
+            }
+            let filesURL = saveLibraryFilesURL(for: id)
+            try ensureManagedDirectory(filesURL, excludedFromBackup: false)
+            try migrateLegacySavesIfNeeded(from: gameRoot, to: filesURL)
+            return (gameManifest, saveManifest, filesURL)
+        }
+
+        let bindings = try saveLibraryBindings()
+        let reusable = try loadAllSaveLibraryManifests().first { candidate in
+            bindings[candidate.id] == nil
+                && candidate.engine == gameManifest.game.engine
+                && candidate.contentFingerprint != nil
+                && candidate.contentFingerprint == gameManifest.game.contentFingerprint
+        }
+
+        let saveManifest: SaveLibraryManifest
+        if let reusable {
+            saveManifest = reusable
+        } else {
+            let id = SaveLibraryID()
+            let root = saveLibraryRootURL(for: id)
+            try ensureManagedDirectory(root, excludedFromBackup: false)
+            try ensureManagedDirectory(saveLibraryFilesURL(for: id), excludedFromBackup: false)
+            saveManifest = SaveLibraryManifest(id: id, game: gameManifest.game)
+            try writeSaveLibraryManifest(saveManifest)
+        }
+
+        let filesURL = saveLibraryFilesURL(for: saveManifest.id)
+        try ensureManagedDirectory(filesURL, excludedFromBackup: false)
+        try migrateLegacySavesIfNeeded(from: gameRoot, to: filesURL)
+        gameManifest.saveLibraryID = saveManifest.id
+        try writeGameManifest(
+            gameManifest,
+            to: gameRoot.appendingPathComponent(Self.manifestFileName)
+        )
+        return (gameManifest, saveManifest, filesURL)
+    }
+
+    private func migrateLegacySavesIfNeeded(from gameRoot: URL, to filesURL: URL) throws {
+        let legacy = gameRoot.appendingPathComponent(Self.savesDirectoryName, isDirectory: true)
+        guard fileManager.fileExists(atPath: legacy.path) else { return }
+        let legacyEntries = try scannedEntries(at: legacy)
+        guard !legacyEntries.isEmpty else {
+            try? fileManager.removeItem(at: legacy)
+            return
+        }
+
+        let destinationEntries = try scannedEntries(at: filesURL)
+        if destinationEntries.isEmpty {
+            try fileManager.removeItem(at: filesURL)
+            try fileManager.moveItem(at: legacy, to: filesURL)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = false
+            var mutableFilesURL = filesURL
+            try mutableFilesURL.setResourceValues(values)
+        } else {
+            // A fingerprint-matched library already owns saves. Merge any
+            // additional legacy paths without overwriting its canonical files.
+            for entry in legacyEntries.sorted(by: { $0.relativePath < $1.relativePath }) {
+                let destination = filesURL.appendingPathComponent(entry.relativePath)
+                if fileManager.fileExists(atPath: destination.path) { continue }
+                if entry.isDirectory {
+                    try fileManager.createDirectory(
+                        at: destination,
+                        withIntermediateDirectories: true
+                    )
+                } else {
+                    try fileManager.createDirectory(
+                        at: destination.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try fileManager.copyItem(at: entry.url, to: destination)
+                }
+            }
+            try fileManager.removeItem(at: legacy)
+        }
+    }
+
+    private func loadAllSaveLibraryManifests() throws -> [SaveLibraryManifest] {
+        let roots = try fileManager.contentsOfDirectory(
+            at: layout.saveLibraries,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        )
+        return try roots.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }).map { root in
+            let values = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard values.isDirectory == true,
+                  values.isSymbolicLink != true,
+                  let uuid = UUID(uuidString: root.lastPathComponent)
+            else { throw StorageError.corruptSaveLibraryManifest }
+            let manifest = try loadSaveLibraryManifest(id: SaveLibraryID(rawValue: uuid))
+            guard manifest.id.rawValue == uuid else {
+                throw StorageError.corruptSaveLibraryManifest
+            }
+            return manifest
+        }
+    }
+
+    private func loadSaveLibraryManifest(id: SaveLibraryID) throws -> SaveLibraryManifest {
+        let root = saveLibraryRootURL(for: id)
+        try validateExistingManagedDirectory(root)
+        let url = root.appendingPathComponent(Self.manifestFileName)
+        do {
+            try rejectSymbolicLink(at: url)
+            let manifest = try decoder().decode(
+                SaveLibraryManifest.self,
+                from: Data(contentsOf: url, options: [.mappedIfSafe])
+            )
+            guard manifest.formatVersion == SaveLibraryManifest.currentFormatVersion,
+                  manifest.id == id
+            else { throw StorageError.corruptSaveLibraryManifest }
+            return manifest
+        } catch let error as StorageError {
+            throw error
+        } catch {
+            throw StorageError.corruptSaveLibraryManifest
+        }
+    }
+
+    private func writeSaveLibraryManifest(_ manifest: SaveLibraryManifest) throws {
+        let data = try encoder().encode(manifest)
+        var options: Data.WritingOptions = [.atomic]
+        #if os(iOS)
+        options.insert(.completeFileProtectionUntilFirstUserAuthentication)
+        #endif
+        try data.write(
+            to: saveLibraryRootURL(for: manifest.id)
+                .appendingPathComponent(Self.manifestFileName),
+            options: options
+        )
+    }
+
+    private func saveLibraryBindings() throws -> [SaveLibraryID: GameID] {
+        let roots = try fileManager.contentsOfDirectory(
+            at: layout.games,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        )
+        var result: [SaveLibraryID: GameID] = [:]
+        for root in roots {
+            guard let gameID = UUID(uuidString: root.lastPathComponent) else { continue }
+            let manifest = try loadGameManifest(at: root)
+            if let saveID = manifest.saveLibraryID {
+                result[saveID] = GameID(rawValue: gameID)
+            }
+        }
+        return result
     }
 
     private func makeTreeReadOnly(at root: URL) throws {

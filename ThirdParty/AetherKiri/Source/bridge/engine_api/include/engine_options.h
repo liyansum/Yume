@@ -78,6 +78,10 @@
  *  ("0"/"1", default "0"). */
 #define ENGINE_OPTION_ERROR_DIALOG_LOGS "error_dialog_logs"
 
+/** Writable directory for engine, plugin and fatal-startup logs. The host
+ *  should set this before opening a game whose content directory is read-only. */
+#define ENGINE_OPTION_LOG_ROOT "log_root"
+
 /** Internal plugin startup policy ("krkrsdl3" / "aether_all"). */
 #define ENGINE_OPTION_PLUGIN_LOAD_MODE "plugin_load_mode"
 

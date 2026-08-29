@@ -10,6 +10,7 @@ struct GamePlayerView: View {
     let suspended: Bool
     let onResume: () -> Void
     let onClose: () -> Void
+    let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
 
     @State private var loadFailed = false
     @State private var inputCommand: WebInputCommand?
@@ -58,18 +59,42 @@ struct GamePlayerView: View {
             }
         }
         .persistentSystemOverlays(.hidden)
+        .onAppear {
+            onLog(
+                "player.view.appeared",
+                false,
+                ["gameID": session.content.game.id.rawValue.uuidString]
+            )
+        }
+        .onChange(of: loadFailed) { _, failed in
+            if failed {
+                onLog(
+                    "player.view.load-failed",
+                    true,
+                    ["gameID": session.content.game.id.rawValue.uuidString]
+                )
+            }
+        }
+        .onDisappear {
+            onLog(
+                "player.view.disappeared",
+                false,
+                ["gameID": session.content.game.id.rawValue.uuidString]
+            )
+        }
     }
 
     @ViewBuilder
     private var playerContent: some View {
         switch session.launchPlan.kind {
         case .web:
-            RestrictedWebGameView(
-                location: session.content,
-                mode: .game,
-                suspended: suspended,
-                inputCommand: inputCommand,
-                loadFailed: $loadFailed
+                RestrictedWebGameView(
+                    location: session.content,
+                    mode: .game,
+                    suspended: suspended,
+                    inputCommand: inputCommand,
+                    onLog: onLog,
+                    loadFailed: $loadFailed
             )
         case let .embeddedWebRuntime(runtimeIdentifier):
             if runtimeIdentifier == "ruffle-web",
@@ -80,6 +105,7 @@ struct GamePlayerView: View {
                     mode: .ruffle(runtimeRoot: runtimeRoot, movie: movie),
                     suspended: suspended,
                     inputCommand: inputCommand,
+                    onLog: onLog,
                     loadFailed: $loadFailed
                 )
             } else {
@@ -91,6 +117,7 @@ struct GamePlayerView: View {
                 runtimeIdentifier: runtimeIdentifier,
                 suspended: suspended,
                 inputCommand: inputCommand,
+                onLog: onLog,
                 loadFailed: $loadFailed
             )
         case .notPlanned:
@@ -120,6 +147,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     let mode: WebPlayerMode
     let suspended: Bool
     let inputCommand: WebInputCommand?
+    let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
     @Binding var loadFailed: Bool
 
     static let mediaPauseFallbackScript = """
@@ -133,7 +161,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(loadFailed: $loadFailed)
+        Coordinator(
+            loadFailed: $loadFailed,
+            onLog: onLog,
+            game: location.game,
+            runtime: mode.runtimeIdentifier
+        )
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -144,6 +177,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         let storageBridge = GameLocalStorageBridge(saveRootURL: location.saveRootURL)
         configuration.userContentController.add(storageBridge, name: GameLocalStorageBridge.messageName)
         configuration.userContentController.addUserScript(storageBridge.bootstrapScript())
+        let diagnosticsBridge = WebDiagnosticsBridge(onMessage: context.coordinator.handleWebMessage)
+        configuration.userContentController.add(
+            diagnosticsBridge,
+            name: WebDiagnosticsBridge.messageName
+        )
+        configuration.userContentController.addUserScript(diagnosticsBridge.bootstrapScript())
         let additionalRoots: [String: URL]
         switch mode {
         case .game:
@@ -155,7 +194,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             LocalGameSchemeHandler(
                 gameID: location.game.id.rawValue,
                 rootURL: location.rootURL,
-                additionalRoots: additionalRoots
+                additionalRoots: additionalRoots,
+                onError: { [coordinator = context.coordinator] message, path in
+                    DispatchQueue.main.async {
+                        coordinator.handleResourceError(message, path: path)
+                    }
+                }
             ),
             forURLScheme: LocalGameSchemeHandler.scheme
         )
@@ -201,13 +245,37 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, @unchecked Sendable {
         @Binding private var loadFailed: Bool
+        private let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
+        private let baseMetadata: [String: String]
         var lastInputCommandID: UUID?
         var isSuspended = false
 
-        init(loadFailed: Binding<Bool>) {
+        init(
+            loadFailed: Binding<Bool>,
+            onLog: @escaping (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void,
+            game: ImportedGame,
+            runtime: String
+        ) {
             _loadFailed = loadFailed
+            self.onLog = onLog
+            self.baseMetadata = [
+                "gameID": game.id.rawValue.uuidString,
+                "engine": game.engine.id.rawValue,
+                "runtime": runtime
+            ]
+        }
+
+        func handleWebMessage(_ kind: String, _ message: String, _ details: [String: String]) {
+            let isError = kind == "error"
+                || kind == "unhandled-rejection"
+                || kind == "console-error"
+            onLog("web.\(kind)", isError, metadata(details, message: message))
+        }
+
+        func handleResourceError(_ message: String, path: String) {
+            onLog("web.resource-failed", true, metadata(["path": path], message: message))
         }
 
         func installNetworkBlockerAndLoad(
@@ -224,10 +292,18 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             ) { [weak self, weak webView] ruleList, error in
                 Task { @MainActor in
                     guard let self, let webView, error == nil, let ruleList else {
+                        if let self {
+                            self.onLog(
+                                "web.network-policy-failed",
+                                true,
+                                self.metadata(["error": String(describing: error)])
+                            )
+                        }
                         self?.loadFailed = true
                         return
                     }
                     webView.configuration.userContentController.add(ruleList)
+                    self.onLog("web.network-policy-ready", false, self.baseMetadata)
                     self.load(webView, location: location, mode: mode)
                 }
             }
@@ -243,6 +319,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             switch mode {
             case .game:
                 guard let entryPoint = location.webEntryPoint else {
+                    onLog("web.entry-point-missing", true, baseMetadata)
                     loadFailed = true
                     return
                 }
@@ -262,9 +339,11 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                 url = components?.url
             }
             guard let url else {
+                onLog("web.url-construction-failed", true, baseMetadata)
                 loadFailed = true
                 return
             }
+            onLog("web.navigation-requested", false, metadata(["url": url.absoluteString]))
             webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
 
@@ -278,10 +357,22 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                 return
             }
             let allowed = url.scheme == LocalGameSchemeHandler.scheme || url.absoluteString == "about:blank"
+            if !allowed {
+                onLog("web.navigation-blocked", false, metadata(["url": url.absoluteString]))
+            }
             decisionHandler(allowed ? .allow : .cancel)
         }
 
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            onLog("web.navigation-started", false, metadata(["url": webView.url?.absoluteString ?? "unknown"]))
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            onLog("web.navigation-finished", false, metadata(["url": webView.url?.absoluteString ?? "unknown"]))
+        }
+
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+            onLog("web.navigation-failed", true, metadata(["error": String(describing: error)]))
             loadFailed = true
         }
 
@@ -290,7 +381,23 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             didFailProvisionalNavigation navigation: WKNavigation!,
             withError error: any Error
         ) {
+            onLog("web.provisional-navigation-failed", true, metadata(["error": String(describing: error)]))
             loadFailed = true
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            onLog("web.content-process-terminated", true, baseMetadata)
+            loadFailed = true
+        }
+
+        private func metadata(
+            _ additional: [String: String] = [:],
+            message: String? = nil
+        ) -> [String: String] {
+            var result = baseMetadata
+            additional.forEach { result[$0.key] = String($0.value.prefix(4_000)) }
+            if let message { result["detail"] = String(message.prefix(4_000)) }
+            return result
         }
     }
 }
@@ -298,6 +405,15 @@ private struct RestrictedWebGameView: UIViewRepresentable {
 private enum WebPlayerMode: Equatable {
     case game
     case ruffle(runtimeRoot: URL, movie: StorageRelativePath)
+}
+
+private extension WebPlayerMode {
+    var runtimeIdentifier: String {
+        switch self {
+        case .game: "restricted-web"
+        case .ruffle: "ruffle-web"
+        }
+    }
 }
 
 private enum RuffleRuntimeResources {
@@ -329,10 +445,16 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
     let runtimeIdentifier: String
     let suspended: Bool
     let inputCommand: WebInputCommand?
+    let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
     @Binding var loadFailed: Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(loadFailed: $loadFailed)
+        Coordinator(
+            loadFailed: $loadFailed,
+            onLog: onLog,
+            game: playSession.content.game,
+            runtimeIdentifier: runtimeIdentifier
+        )
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -360,6 +482,16 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             )
             context.coordinator.install(runtime: runtime, in: container)
         } catch {
+            onLog(
+                "native.create-failed",
+                true,
+                [
+                    "error": String(describing: error),
+                    "runtime": runtimeIdentifier,
+                    "gameID": playSession.content.game.id.rawValue.uuidString,
+                    "engine": playSession.content.game.engine.id.rawValue
+                ]
+            )
             loadFailed = true
         }
         return container
@@ -383,14 +515,29 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
     @MainActor
     final class Coordinator {
         @Binding private var loadFailed: Bool
+        private let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
         private var runtime: NativeRuntimeSession?
         private var eventTask: Task<Void, Never>?
         private var attachTask: Task<Void, Never>?
+        private var firstFrameWatchdog: Task<Void, Never>?
         private var isSuspended = false
+        private var receivedFirstFrame = false
+        private let baseMetadata: [String: String]
         var lastInputCommandID: UUID?
 
-        init(loadFailed: Binding<Bool>) {
+        init(
+            loadFailed: Binding<Bool>,
+            onLog: @escaping (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void,
+            game: ImportedGame,
+            runtimeIdentifier: String
+        ) {
             _loadFailed = loadFailed
+            self.onLog = onLog
+            self.baseMetadata = [
+                "gameID": game.id.rawValue.uuidString,
+                "engine": game.engine.id.rawValue,
+                "runtime": runtimeIdentifier
+            ]
         }
 
         func install(runtime: NativeRuntimeSession, in container: UIView) {
@@ -398,13 +545,36 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             eventTask = Task { @MainActor [weak self] in
                 for await event in runtime.events {
                     guard let self else { return }
-                    if case .failed = event { loadFailed = true }
+                    switch event {
+                    case .started:
+                        onLog("native.started", false, baseMetadata)
+                    case .firstFrame:
+                        receivedFirstFrame = true
+                        firstFrameWatchdog?.cancel()
+                        onLog("native.first-frame", false, baseMetadata)
+                    case .paused:
+                        onLog("native.paused", false, baseMetadata)
+                    case .resumed:
+                        onLog("native.resumed", false, baseMetadata)
+                    case .stopped:
+                        onLog("native.stopped", false, baseMetadata)
+                    case let .warning(code):
+                        onLog("native.warning", false, metadata(["code": code]))
+                    case let .failed(code):
+                        onLog("native.failed", true, metadata(["code": code]))
+                        loadFailed = true
+                    }
                 }
             }
             attachTask = Task { @MainActor [weak self, weak container] in
                 do {
                     try await runtime.start()
                 } catch {
+                    self?.onLog(
+                        "native.start-threw",
+                        true,
+                        self?.metadata(["error": String(describing: error)]) ?? [:]
+                    )
                     self?.loadFailed = true
                     return
                 }
@@ -415,10 +585,17 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                         gameView.frame = container.bounds
                         gameView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                         container.insertSubview(gameView, at: 0)
+                        onLog("native.view-attached", false, baseMetadata)
+                        firstFrameWatchdog = Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: .seconds(15))
+                            guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
+                            onLog("native.first-frame-timeout", true, baseMetadata)
+                        }
                         return
                     }
                     try? await Task.sleep(for: .milliseconds(25))
                 }
+                self?.onLog("native.view-timeout", true, self?.baseMetadata ?? [:])
                 self?.loadFailed = true
             }
         }
@@ -445,9 +622,17 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             eventTask = nil
             attachTask?.cancel()
             attachTask = nil
+            firstFrameWatchdog?.cancel()
+            firstFrameWatchdog = nil
             guard let runtime else { return }
             self.runtime = nil
             Task { await runtime.stop() }
+        }
+
+        private func metadata(_ additional: [String: String]) -> [String: String] {
+            var result = baseMetadata
+            additional.forEach { result[$0.key] = String($0.value.prefix(4_000)) }
+            return result
         }
     }
 }
@@ -466,6 +651,82 @@ private struct WebInputCommand: Equatable {
         case 88: .cancel
         default: nil
         }
+    }
+}
+
+private final class WebDiagnosticsBridge: NSObject, WKScriptMessageHandler {
+    static let messageName = "yumeDiagnostics"
+
+    private let onMessage: (_ kind: String, _ message: String, _ details: [String: String]) -> Void
+
+    init(onMessage: @escaping (_ kind: String, _ message: String, _ details: [String: String]) -> Void) {
+        self.onMessage = onMessage
+    }
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == Self.messageName,
+              let body = message.body as? [String: Any]
+        else { return }
+        let kind = String(describing: body["kind"] ?? "message")
+        let detail = String(describing: body["message"] ?? "")
+        var metadata: [String: String] = [:]
+        for key in ["source", "line", "column", "stack"] {
+            if let value = body[key] {
+                metadata[key] = String(String(describing: value).prefix(4_000))
+            }
+        }
+        onMessage(kind, detail, metadata)
+    }
+
+    func bootstrapScript() -> WKUserScript {
+        WKUserScript(
+            source: """
+            (() => {
+              const bridge = window.webkit?.messageHandlers?.yumeDiagnostics;
+              if (!bridge || window.__yumeDiagnosticsInstalled) return;
+              window.__yumeDiagnosticsInstalled = true;
+              const text = value => {
+                try {
+                  if (value instanceof Error) return value.stack || value.message || String(value);
+                  if (typeof value === "string") return value;
+                  return JSON.stringify(value);
+                } catch (_) { return String(value); }
+              };
+              const send = payload => {
+                try {
+                  for (const key of Object.keys(payload)) payload[key] = text(payload[key]).slice(0, 4000);
+                  bridge.postMessage(payload);
+                } catch (_) {}
+              };
+              for (const level of ["log", "info", "warn", "error", "debug"]) {
+                const original = console[level]?.bind(console);
+                console[level] = (...args) => {
+                  send({kind: `console-${level}`, message: args.map(text).join(" ")});
+                  if (original) original(...args);
+                };
+              }
+              window.addEventListener("error", event => send({
+                kind: "error",
+                message: event.message || "Script error",
+                source: event.filename || "",
+                line: event.lineno || 0,
+                column: event.colno || 0,
+                stack: event.error?.stack || ""
+              }));
+              window.addEventListener("unhandledrejection", event => send({
+                kind: "unhandled-rejection",
+                message: text(event.reason),
+                stack: event.reason?.stack || ""
+              }));
+              send({kind: "bridge-ready", message: location.href});
+            })();
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
     }
 }
 
@@ -524,14 +785,21 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
     private let gameID: UUID
     private let rootURL: URL
     private let additionalRoots: [String: URL]
+    private let onError: @Sendable (_ message: String, _ path: String) -> Void
     private let queue = DispatchQueue(label: "com.yume.local-game-resources", qos: .userInitiated)
     private let lock = NSLock()
     private var stoppedTasks: Set<ObjectIdentifier> = []
 
-    init(gameID: UUID, rootURL: URL, additionalRoots: [String: URL] = [:]) {
+    init(
+        gameID: UUID,
+        rootURL: URL,
+        additionalRoots: [String: URL] = [:],
+        onError: @escaping @Sendable (_ message: String, _ path: String) -> Void
+    ) {
         self.gameID = gameID
         self.rootURL = rootURL.standardizedFileURL
         self.additionalRoots = additionalRoots.mapValues(\.standardizedFileURL)
+        self.onError = onError
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
@@ -639,6 +907,8 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
             task.didFinish()
         } catch {
             guard !isStopped(identifier) else { return }
+            let requestedPath = task.request.url?.path ?? "unknown"
+            onError(String(describing: error), requestedPath)
             task.didFailWithError(error)
         }
     }

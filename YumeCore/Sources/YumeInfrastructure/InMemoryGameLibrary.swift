@@ -21,6 +21,11 @@ public actor InMemoryGameLibrary: GameLibrary, GameMaintenance {
         games.removeAll { $0.id == id }
     }
 
+    public func renameGame(id: GameID, title: String) async throws {
+        guard let index = games.firstIndex(where: { $0.id == id }) else { return }
+        games[index].title = title
+    }
+
     public func storageBreakdown(for id: GameID) async throws -> GameStorageBreakdown {
         let game = games.first { $0.id == id }
         return GameStorageBreakdown(

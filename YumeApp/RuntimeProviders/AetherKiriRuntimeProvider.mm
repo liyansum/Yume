@@ -5,9 +5,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <new>
 #include <string>
+#include <unistd.h>
 
 #include "../../YumeCore/Sources/CYumeRuntimeBridge/include/CYumeRuntimeBridge.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/engine_api/include/engine_api.h"
@@ -36,6 +39,7 @@ static void Emit(AetherSession *session, YumeRuntimeEventKind kind,
 - (int32_t)sendText:(const char *)text;
 - (int32_t)sendPointerX:(double)x y:(double)y pressed:(BOOL)pressed;
 - (int32_t)stopEngine;
+- (void)drainEngineLogs;
 - (void)detachSession;
 @end
 
@@ -50,7 +54,41 @@ struct AetherSession {
     void *callback_context = nullptr;
     __strong YumeAetherRuntimeView *view = nil;
     std::atomic<bool> stopped{false};
+    std::mutex log_mutex;
 };
+
+static void AppendHostLog(AetherSession *session, const std::string &message) {
+    if (session == nullptr || session->log_root.empty()) return;
+    std::lock_guard<std::mutex> guard(session->log_mutex);
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->log_root.c_str()];
+        if (root.length == 0) return;
+        NSError *directoryError = nil;
+        [[NSFileManager defaultManager] createDirectoryAtPath:root
+                                 withIntermediateDirectories:YES
+                                                  attributes:nil
+                                                       error:&directoryError];
+        if (directoryError != nil) return;
+        NSString *path = [root stringByAppendingPathComponent:@"aetherkiri-host.log"];
+        FILE *stream = fopen(path.fileSystemRepresentation, "ab");
+        if (stream == nullptr) return;
+        const double timestamp = NSDate.date.timeIntervalSince1970;
+        fprintf(stream, "%.3f [thread=%s] %s\n", timestamp,
+                NSThread.isMainThread ? "main" : "worker", message.c_str());
+        fflush(stream);
+        fsync(fileno(stream));
+        fclose(stream);
+    }
+}
+
+static void AppendEngineError(AetherSession *session, engine_handle_t engine,
+                              const char *stage) {
+    const char *error = engine_get_last_error(engine);
+    std::string line(stage != nullptr ? stage : "engine.error");
+    line += " result=";
+    line += error != nullptr && error[0] != '\0' ? error : "<none>";
+    AppendHostLog(session, line);
+}
 
 static void Emit(AetherSession *session, YumeRuntimeEventKind kind,
                  const char *code) {
@@ -142,7 +180,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (_stopped || _session == nullptr) return -1;
     if (_engine != nullptr) return 0;
 
+    AppendHostLog(_session, "start.enter");
     SDL_SetMainReady();
+    AppendHostLog(_session, "start.sdl-ready");
     if (_session->kind == AetherRuntimeKind::ONScripter) {
         aetherkiri::onscripter::RegisterRuntimeProvider();
     }
@@ -153,6 +193,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     description.writable_path_utf8 = _session->save_root.c_str();
     description.cache_path_utf8 = _session->derived_root.c_str();
     engine_result_t result = engine_create(&description, &_engine);
+    AppendHostLog(_session, result == ENGINE_RESULT_OK && _engine != nullptr
+        ? "start.engine-created" : "start.engine-create-failed");
     if (result != ENGINE_RESULT_OK || _engine == nullptr) {
         Emit(_session, YUME_RUNTIME_EVENT_FAILED, "aether.create");
         return static_cast<int32_t>(result != ENGINE_RESULT_OK ? result : -1);
@@ -161,28 +203,36 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const char *runtime = _session->kind == AetherRuntimeKind::ONScripter
                               ? "onscripter"
                               : "kirikiri";
-    if (SetOption(_engine, "runtime", runtime) != ENGINE_RESULT_OK ||
+    if ((!_session->log_root.empty() &&
+         SetOption(_engine, ENGINE_OPTION_LOG_ROOT,
+                   _session->log_root.c_str()) != ENGINE_RESULT_OK) ||
+        SetOption(_engine, "runtime", runtime) != ENGINE_RESULT_OK ||
         SetOption(_engine, ENGINE_OPTION_RENDER_BACKEND,
                   ENGINE_RENDERER_DEBUG_CPU) != ENGINE_RESULT_OK ||
         SetOption(_engine, ENGINE_OPTION_FPS_LIMIT, "60") != ENGINE_RESULT_OK) {
+        AppendEngineError(_session, _engine, "start.configure-failed");
         Emit(_session, YUME_RUNTIME_EVENT_FAILED, "aether.configure");
         engine_destroy(_engine);
         _engine = nullptr;
         return -2;
     }
+    AppendHostLog(_session, "start.configured");
     NSString *fontPath = BundledDefaultFontPath();
     if (fontPath.length > 0) {
         (void)SetOption(_engine, "default_font", fontPath.fileSystemRepresentation);
     }
 
     [self layoutIfNeeded];
+    AppendHostLog(_session, "start.open-game-async.begin");
     result = engine_open_game_async(_engine, _session->content_root.c_str(), nullptr);
     if (result != ENGINE_RESULT_OK) {
+        AppendEngineError(_session, _engine, "start.open-game-async.failed");
         Emit(_session, YUME_RUNTIME_EVENT_FAILED, "aether.open");
         engine_destroy(_engine);
         _engine = nullptr;
         return static_cast<int32_t>(result);
     }
+    AppendHostLog(_session, "start.open-game-async.queued");
 
     _displayLink = [CADisplayLink displayLinkWithTarget:self
                                                selector:@selector(displayLinkDidFire:)];
@@ -199,14 +249,19 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (void)displayLinkDidFire:(CADisplayLink *)link {
     if (_engine == nullptr || _stopped || _paused) return;
 
+    if (!_startupResolved) [self drainEngineLogs];
+
     uint32_t startupState = ENGINE_STARTUP_STATE_IDLE;
     const engine_result_t startupResult =
         engine_get_startup_state(_engine, &startupState);
     if (startupResult != ENGINE_RESULT_OK) {
+        AppendEngineError(_session, _engine, "frame.startup-state.failed");
         [self failWithCode:"aether.startup-state"];
         return;
     }
     if (startupState == ENGINE_STARTUP_STATE_FAILED) {
+        [self drainEngineLogs];
+        AppendEngineError(_session, _engine, "frame.startup.failed");
         [self failWithCode:"aether.startup"];
         return;
     }
@@ -221,6 +276,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         std::max(1.0, std::round(delta * 1000.0)));
     const engine_result_t tickResult = engine_tick(_engine, deltaMilliseconds);
     if (tickResult != ENGINE_RESULT_OK) {
+        AppendEngineError(_session, _engine, "frame.tick.failed");
         [self failWithCode:"aether.tick"];
         return;
     }
@@ -263,13 +319,29 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     _frameHeight = frame.height;
     if (!_firstFrameSent) {
         _firstFrameSent = YES;
+        AppendHostLog(_session, "frame.first-frame");
         Emit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "aether.first-frame");
+    }
+}
+
+- (void)drainEngineLogs {
+    if (_engine == nullptr || _session == nullptr) return;
+    char buffer[64 * 1024] = {};
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        uint32_t bytesWritten = 0;
+        const engine_result_t result = engine_drain_startup_logs(
+            _engine, buffer, sizeof(buffer), &bytesWritten);
+        if (result != ENGINE_RESULT_OK || bytesWritten == 0) return;
+        AppendHostLog(_session, std::string(buffer, bytesWritten));
+        if (bytesWritten + 1u < sizeof(buffer)) return;
     }
 }
 
 - (void)failWithCode:(const char *)code {
     if (_stopped) return;
     _displayLink.paused = YES;
+    AppendHostLog(_session, std::string("runtime.failed code=") +
+        (code != nullptr ? code : "<none>"));
     Emit(_session, YUME_RUNTIME_EVENT_FAILED, code);
 }
 
@@ -394,8 +466,11 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     _displayLink = nil;
     self.layer.contents = nil;
     if (_engine != nullptr) {
+        [self drainEngineLogs];
+        AppendHostLog(_session, "stop.engine-destroy.begin");
         (void)engine_destroy(_engine);
         _engine = nullptr;
+        AppendHostLog(_session, "stop.engine-destroy.end");
     }
     if (_session != nullptr) {
         _session->stopped.store(true);

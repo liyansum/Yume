@@ -40,13 +40,11 @@ struct SettingsView: View {
                     Label("settings.diagnostics", systemImage: "waveform.path.ecg")
                 }
 
-                #if DEBUG
                 NavigationLink {
                     DeveloperDiagnosticsView(model: model)
                 } label: {
                     Label("diagnostics.dev.title", systemImage: "ladybug")
                 }
-                #endif
 
                 NavigationLink {
                     LicensesView()
@@ -76,10 +74,21 @@ struct SettingsView: View {
 private struct StorageSettingsView: View {
     let model: AppModel
 
+    @State private var pendingGameDeletion: ImportedGame?
+    @State private var pendingSaveDeletion: GameSaveLibrary?
+    @State private var operationFailed = false
+
     private var installedByteCount: Int64 {
         model.games.reduce(0) { partial, game in
             let addition = partial.addingReportingOverflow(game.installedByteCount)
             return addition.overflow ? Int64.max : addition.partialValue
+        }
+    }
+
+    private var saveByteCount: Int64 {
+        model.saveLibraries.reduce(0) { partial, library in
+            let result = partial.addingReportingOverflow(library.byteCount)
+            return result.overflow ? Int64.max : result.partialValue
         }
     }
 
@@ -90,19 +99,154 @@ private struct StorageSettingsView: View {
                 LabeledContent("storage.summary.installed") {
                     Text(installedByteCount, format: .byteCount(style: .file))
                 }
+                LabeledContent("storage.summary.saves") {
+                    Text(saveByteCount, format: .byteCount(style: .file))
+                }
             }
 
-            Section {
-                Text("storage.summary.message")
-                    .foregroundStyle(.secondary)
+            Section("storage.games.title") {
+                if model.games.isEmpty {
+                    Text("storage.games.empty")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.games) { game in
+                        HStack(spacing: 12) {
+                            Image(systemName: "gamecontroller.fill")
+                                .foregroundStyle(.tint)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(game.title)
+                                Text(game.engine.displayName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(game.installedByteCount, format: .byteCount(style: .file))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button(role: .destructive) {
+                                pendingGameDeletion = game
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(Text("game.delete"))
+                        }
+                    }
+                }
+            }
+
+            Section("storage.saves.title") {
+                if model.saveLibraries.isEmpty {
+                    Text("storage.saves.empty")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(model.saveLibraries) { library in
+                        HStack(spacing: 12) {
+                            Image(systemName: library.boundGameID == nil ? "archivebox" : "link.circle.fill")
+                                .foregroundStyle(
+                                    library.boundGameID == nil ? Color.secondary : Color.accentColor
+                                )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(library.title)
+                                Text(saveBindingDescription(library))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(library.byteCount, format: .byteCount(style: .file))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button(role: .destructive) {
+                                pendingSaveDeletion = library
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(Text("storage.saves.delete"))
+                        }
+                    }
+                }
+            } footer: {
+                Text("storage.saves.message")
             }
         }
         .navigationTitle("settings.storage")
+        .task { await model.refreshSaveLibraries() }
         .toolbar {
             Button("common.refresh") {
-                Task { await model.reloadLibrary() }
+                Task {
+                    await model.reloadLibrary()
+                    await model.refreshSaveLibraries()
+                }
             }
         }
+        .confirmationDialog(
+            "storage.games.delete.title",
+            isPresented: pendingGameDeletionBinding,
+            titleVisibility: .visible
+        ) {
+            Button("storage.games.delete.confirm", role: .destructive) {
+                guard let game = pendingGameDeletion else { return }
+                pendingGameDeletion = nil
+                Task {
+                    operationFailed = !(await model.remove(game, policy: .preserveSaves))
+                }
+            }
+            Button("common.cancel", role: .cancel) { pendingGameDeletion = nil }
+        } message: {
+            Text("storage.games.delete.message")
+        }
+        .confirmationDialog(
+            "storage.saves.delete.title",
+            isPresented: pendingSaveDeletionBinding,
+            titleVisibility: .visible
+        ) {
+            Button("storage.saves.delete.confirm", role: .destructive) {
+                guard let library = pendingSaveDeletion else { return }
+                pendingSaveDeletion = nil
+                Task {
+                    operationFailed = !(await model.deleteSaveLibrary(library))
+                }
+            }
+            Button("common.cancel", role: .cancel) { pendingSaveDeletion = nil }
+        } message: {
+            Text(saveDeletionMessage)
+        }
+        .alert("storage.operation.error.title", isPresented: $operationFailed) {
+            Button("common.ok", role: .cancel) {}
+        } message: {
+            Text("storage.operation.error.message")
+        }
+    }
+
+    private func saveBindingDescription(_ library: GameSaveLibrary) -> String {
+        guard let gameID = library.boundGameID,
+              let game = model.games.first(where: { $0.id == gameID })
+        else { return String(localized: "storage.saves.unbound") }
+        return String.localizedStringWithFormat(
+            String(localized: "storage.saves.bound"),
+            game.title
+        )
+    }
+
+    private var pendingGameDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { pendingGameDeletion != nil },
+            set: { if !$0 { pendingGameDeletion = nil } }
+        )
+    }
+
+    private var pendingSaveDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { pendingSaveDeletion != nil },
+            set: { if !$0 { pendingSaveDeletion = nil } }
+        )
+    }
+
+    private var saveDeletionMessage: LocalizedStringKey {
+        pendingSaveDeletion?.boundGameID == nil
+            ? "storage.saves.delete.message"
+            : "storage.saves.delete.bound.message"
     }
 }
 
@@ -200,6 +344,15 @@ private struct DiagnosticsView: View {
                 LabeledContent("diagnostics.entries", value: model.diagnosticEntryCount.formatted())
             }
 
+            Section("appLogs.title") {
+                NavigationLink {
+                    AppLogsView(model: model)
+                } label: {
+                    Label("appLogs.open", systemImage: "doc.text.magnifyingglass")
+                }
+                LabeledContent("appLogs.count", value: model.appLogs.count.formatted())
+            }
+
             Section("diagnostics.export.title") {
                 Button("diagnostics.export.prepare") {
                     Task { await model.prepareDiagnosticExport() }
@@ -217,6 +370,7 @@ private struct DiagnosticsView: View {
         .navigationTitle("settings.diagnostics")
         .task {
             await model.refreshDiagnostics()
+            await model.refreshAppLogs()
         }
     }
 }

@@ -25,10 +25,12 @@ public:
      *
      * @param width   Initial surface width in pixels
      * @param height  Initial surface height in pixels
+     * @param initialize_gpu_bridge  Whether to create the optional EGL bridge
      * @return true on success
      */
     static bool Initialize(uint32_t width, uint32_t height,
-                           krkr::AngleBackend backend = krkr::AngleBackend::OpenGLES);
+                           krkr::AngleBackend backend = krkr::AngleBackend::OpenGLES,
+                           bool initialize_gpu_bridge = true);
 
     /**
      * Shut down the engine runtime and destroy the EGL context.

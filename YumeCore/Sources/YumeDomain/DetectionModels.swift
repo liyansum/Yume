@@ -97,15 +97,18 @@ public struct GameManifest: Codable, Hashable, Sendable {
     public var game: ImportedGame
     public let contentRoot: StorageRelativePath
     public let detection: ProbeResult
+    public var saveLibraryID: SaveLibraryID?
 
     public init(
         game: ImportedGame,
         contentRoot: StorageRelativePath,
-        detection: ProbeResult
+        detection: ProbeResult,
+        saveLibraryID: SaveLibraryID? = nil
     ) {
         self.formatVersion = Self.currentFormatVersion
         self.game = game
         self.contentRoot = contentRoot
         self.detection = detection
+        self.saveLibraryID = saveLibraryID
     }
 }

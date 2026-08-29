@@ -19,6 +19,10 @@ struct LibraryView: View {
     @State private var sort = LibrarySort.recentlyPlayed
     @State private var presentsFileImporter = false
     @State private var archivePassword = ""
+    @State private var pendingDeletion: ImportedGame?
+    @State private var pendingRename: ImportedGame?
+    @State private var renameTitle = ""
+    @State private var libraryOperationFailed = false
 
     private var layout: LayoutMode {
         get {
@@ -133,6 +137,39 @@ struct LibraryView: View {
                 )
             }
         }
+        .confirmationDialog(
+            "game.delete.quick.title",
+            isPresented: pendingDeletionBinding,
+            titleVisibility: .visible
+        ) {
+            Button("game.delete.quick.confirm", role: .destructive) {
+                guard let game = pendingDeletion else { return }
+                pendingDeletion = nil
+                Task {
+                    libraryOperationFailed = !(await model.remove(game, policy: .preserveSaves))
+                }
+            }
+            Button("common.cancel", role: .cancel) { pendingDeletion = nil }
+        } message: {
+            Text("game.delete.quick.message")
+        }
+        .alert("game.rename.title", isPresented: pendingRenameBinding) {
+            TextField("game.rename.placeholder", text: $renameTitle)
+            Button("common.cancel", role: .cancel) { pendingRename = nil }
+            Button("common.save") {
+                guard let game = pendingRename else { return }
+                pendingRename = nil
+                Task {
+                    libraryOperationFailed = !(await model.rename(game, to: renameTitle))
+                }
+            }
+            .disabled(renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .alert("library.operation.error.title", isPresented: $libraryOperationFailed) {
+            Button("common.ok", role: .cancel) {}
+        } message: {
+            Text("library.operation.error.message")
+        }
     }
 
     private var emptyLibrary: some View {
@@ -150,21 +187,30 @@ struct LibraryView: View {
 
     private var grid: some View {
         ScrollView {
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? 190 : 150), spacing: 16)],
-                spacing: 20
-            ) {
-                ForEach(visibleGames) { game in
-                    NavigationLink {
-                        GameDetailView(game: game, model: model)
-                    } label: {
-                        GameGridItem(game: game)
+            VStack(alignment: .leading, spacing: 18) {
+                libraryHeader
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: horizontalSizeClass == .regular ? 220 : 160), spacing: 14)],
+                    spacing: 16
+                ) {
+                    ForEach(visibleGames) { game in
+                        NavigationLink {
+                            GameDetailView(game: game, model: model)
+                        } label: {
+                            GameGridItem(game: game)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            gameActions(for: game)
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
+        .background(Color(uiColor: .systemGroupedBackground))
     }
 
     private var list: some View {
@@ -174,8 +220,68 @@ struct LibraryView: View {
             } label: {
                 GameListItem(game: game)
             }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                Button(role: .destructive) {
+                    pendingDeletion = game
+                } label: {
+                    Label("game.delete", systemImage: "trash")
+                }
+                .tint(.red)
+
+                Button {
+                    beginRename(game)
+                } label: {
+                    Label("game.rename", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+            .contextMenu { gameActions(for: game) }
         }
         .listStyle(.insetGrouped)
+    }
+
+    private var libraryHeader: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "rectangle.stack.fill")
+                .font(.title2)
+                .foregroundStyle(.tint)
+                .frame(width: 44, height: 44)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 13))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("library.collection.title")
+                    .font(.headline)
+                Text(
+                    String.localizedStringWithFormat(
+                        String(localized: "library.collection.count"),
+                        Int64(visibleGames.count)
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func gameActions(for game: ImportedGame) -> some View {
+        Button {
+            beginRename(game)
+        } label: {
+            Label("game.rename", systemImage: "pencil")
+        }
+        Button(role: .destructive) {
+            pendingDeletion = game
+        } label: {
+            Label("game.delete", systemImage: "trash")
+        }
+    }
+
+    private func beginRename(_ game: ImportedGame) {
+        renameTitle = game.title
+        pendingRename = game
     }
 
     @ToolbarContentBuilder
@@ -256,6 +362,20 @@ struct LibraryView: View {
                     model.cancelArchivePassword()
                 }
             }
+        )
+    }
+
+    private var pendingDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { pendingDeletion != nil },
+            set: { if !$0 { pendingDeletion = nil } }
+        )
+    }
+
+    private var pendingRenameBinding: Binding<Bool> {
+        Binding(
+            get: { pendingRename != nil },
+            set: { if !$0 { pendingRename = nil } }
         )
     }
 

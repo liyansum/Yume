@@ -14,6 +14,20 @@ public struct GameID: RawRepresentable, Codable, Hashable, Sendable, Identifiabl
     }
 }
 
+public struct SaveLibraryID: RawRepresentable, Codable, Hashable, Sendable, Identifiable {
+    public let rawValue: UUID
+
+    public var id: UUID { rawValue }
+
+    public init(rawValue: UUID) {
+        self.rawValue = rawValue
+    }
+
+    public init() {
+        self.init(rawValue: UUID())
+    }
+}
+
 public struct EngineID: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: String
 

@@ -266,7 +266,7 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: saveURL), Data("original-save".utf8))
     }
 
-    func testRemovingGameCanPreserveSavesAsDetachedData() async throws {
+    func testRemovingGamePreservesIndependentSaveLibrary() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }
         try fixture.makeMZGame()
@@ -282,15 +282,46 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         )
 
         let breakdown = try await storage.storageBreakdown(for: imported.id)
+        let saveLibrary = try await storage.saveLibrary(for: imported.id)
         try await storage.removeGame(id: imported.id, policy: .preserveSaves)
-        let detachedSave = storage.layout.detachedSaves.appendingPathComponent(
-            "\(imported.id.rawValue.uuidString.lowercased())/saves/slot1.json"
+        let preservedSave = storage.layout.saveLibraries.appendingPathComponent(
+            "\(saveLibrary.id.rawValue.uuidString.lowercased())/files/slot1.json"
         )
 
         XCTAssertEqual(breakdown.saveByteCount, Int64("keep-me".utf8.count))
-        XCTAssertEqual(try Data(contentsOf: detachedSave), Data("keep-me".utf8))
+        XCTAssertEqual(try Data(contentsOf: preservedSave), Data("keep-me".utf8))
+        let libraries = try await storage.saveLibraries()
+        XCTAssertEqual(libraries.first(where: { $0.id == saveLibrary.id })?.boundGameID, nil)
         let removed = try await storage.game(id: imported.id)
         XCTAssertNil(removed)
+    }
+
+    func testDeletingBoundSaveLibraryCreatesFreshEmptyLibraryForGame() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        try fixture.makeMZGame()
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+        let imported = try await service.importDirectory(at: fixture.sourceRoot)
+        let first = try await storage.saveLibrary(for: imported.id)
+        let location = try await storage.contentLocation(for: imported.id)
+        try Data("erase-me".utf8).write(
+            to: location.saveRootURL.appendingPathComponent("slot.json")
+        )
+
+        try await storage.deleteSaveLibrary(id: first.id)
+
+        let replacement = try await storage.saveLibrary(for: imported.id)
+        XCTAssertNotEqual(replacement.id, first.id)
+        XCTAssertEqual(replacement.byteCount, 0)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: storage.layout.saveLibraries.appendingPathComponent(
+                first.id.rawValue.uuidString.lowercased()
+            ).path
+        ))
     }
 
     func testDuplicateImportIsRejectedWithoutChangingExistingGame() async throws {

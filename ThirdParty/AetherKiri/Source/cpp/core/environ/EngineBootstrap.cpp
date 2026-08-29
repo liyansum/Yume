@@ -42,7 +42,8 @@ bool TVPEngineBootstrap::s_initialized = false;
 // ---------------------------------------------------------------------------
 
 bool TVPEngineBootstrap::Initialize(uint32_t width, uint32_t height,
-                                    krkr::AngleBackend backend) {
+                                    krkr::AngleBackend backend,
+                                    bool initialize_gpu_bridge) {
     if (s_initialized) {
         spdlog::warn("TVPEngineBootstrap::Initialize called but already initialized");
         return true;
@@ -54,8 +55,15 @@ bool TVPEngineBootstrap::Initialize(uint32_t width, uint32_t height,
     spdlog::debug("EngineBootstrap: starting initialization");
     spdlog::default_logger()->flush();
 
-    // 2. Initialize host graphics state.
-    InitializeGraphics(width, height, backend);
+    // 2. Initialize host graphics state. DebugCpu publishes an RGBA frame and
+    // never consumes the optional EGL bridge. Creating ANGLE/EGL from the
+    // asynchronous startup worker is both unnecessary and unsafe on iOS.
+    if (initialize_gpu_bridge) {
+        InitializeGraphics(width, height, backend);
+    } else {
+        spdlog::info("EngineBootstrap: skipping EGL for CPU renderer ({}x{})",
+                     width, height);
+    }
     spdlog::default_logger()->flush();
 
     TVPForceRegisterGodotRenderManager();

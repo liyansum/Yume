@@ -38,10 +38,23 @@ struct RootView: View {
             }
         }
         .task {
+            await model.startAppLoggingIfNeeded()
             await model.loadLibraryIfNeeded()
             await model.refreshRTPPackages()
         }
         .onChange(of: scenePhase) { _, phase in
+            let phaseName = switch phase {
+            case .active: "active"
+            case .inactive: "inactive"
+            case .background: "background"
+            @unknown default: "unknown"
+            }
+            Task {
+                await model.recordAppEvent(
+                    "app.scene-phase",
+                    metadata: ["phase": phaseName]
+                )
+            }
             guard phase == .background, model.activeSession != nil else { return }
             model.suspendPlayback()
         }
@@ -50,7 +63,16 @@ struct RootView: View {
                 session: session,
                 suspended: model.isPlaybackSuspended,
                 onResume: { model.resumePlayback() },
-                onClose: { Task { await model.stopPlaying() } }
+                onClose: { Task { await model.stopPlaying() } },
+                onLog: { message, isError, metadata in
+                    Task {
+                        await model.recordPlayerLog(
+                            message,
+                            isError: isError,
+                            metadata: metadata
+                        )
+                    }
+                }
             )
         }
         .alert("player.error.title", isPresented: playbackFailureBinding) {

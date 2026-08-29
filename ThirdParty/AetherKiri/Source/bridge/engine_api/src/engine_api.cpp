@@ -153,6 +153,7 @@ extern "C" uint32_t TVPHostCopyTextInputText(char* out_buffer,
 struct engine_handle_s {
   std::recursive_mutex mutex;
   std::string last_error;
+  std::string log_root;
   int state = 0;
   std::thread::id owner_thread;
   bool runtime_owner = false;
@@ -811,7 +812,8 @@ std::shared_ptr<spdlog::logger> EnsureNamedLogger(const char* name) {
   return spdlog::stdout_color_mt(name);
 }
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && \
+    !(defined(__APPLE__) && TARGET_OS_IPHONE)
 void CrashSignalHandler(int sig, siginfo_t* info, void* context) {
   spdlog::critical("FATAL SIGNAL {} received! fault={}", sig,
                    info ? info->si_addr : nullptr);
@@ -911,7 +913,11 @@ void CrashTerminateHandler() {
 
 void InstallCrashSignalHandlers() {
   std::set_terminate(CrashTerminateHandler);
-#if !defined(_WIN32)
+#if !defined(_WIN32) && \
+    !(defined(__APPLE__) && TARGET_OS_IPHONE)
+  // On iOS the OS crash reporter already preserves the original faulting
+  // context. Re-raising from a process-wide handler replaces that context
+  // with raise()/SIGABRT and is especially misleading inside LiveContainer.
   struct sigaction action {};
   action.sa_sigaction = CrashSignalHandler;
   sigemptyset(&action.sa_mask);
@@ -1162,12 +1168,15 @@ std::thread DetachStartupWorker(engine_handle_s* impl) {
   return std::move(impl->startup.worker);
 }
 
-bool EnsureEngineRuntimeInitialized(uint32_t width, uint32_t height,
-                                    krkr::AngleBackend backend = krkr::AngleBackend::OpenGLES) {
+bool EnsureEngineRuntimeInitialized(
+    uint32_t width, uint32_t height,
+    krkr::AngleBackend backend = krkr::AngleBackend::OpenGLES,
+    bool initialize_gpu_bridge = true) {
   if (g_engine_bootstrapped) {
     return true;
   }
-  if (!TVPEngineBootstrap::Initialize(width, height, backend)) {
+  if (!TVPEngineBootstrap::Initialize(
+          width, height, backend, initialize_gpu_bridge)) {
     return false;
   }
   g_engine_bootstrapped = true;
@@ -1792,7 +1801,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 
   if (!EnsureEngineRuntimeInitialized(impl->frame.surface_width,
                                       impl->frame.surface_height,
-                                      impl->render.angle_backend)) {
+                                      impl->render.angle_backend,
+                                      impl->render.renderer !=
+                                          ENGINE_RENDERER_DEBUG_CPU)) {
     std::lock_guard<std::recursive_mutex> guard(impl->mutex);
     SetHandleErrorLocked(impl, "failed to initialize engine runtime for host mode");
     return ENGINE_RESULT_INTERNAL_ERROR;
@@ -1854,7 +1865,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #if defined(__EMSCRIPTEN__)
     std::string log_file_path = TVPGetDefaultFileDir();
 #else
-    std::string log_file_path = sidecar_root_path;
+    std::string log_file_path = impl->log_root.empty()
+        ? sidecar_root_path
+        : impl->log_root;
 #endif
     if (!log_file_path.empty() && log_file_path.back() != '/') {
       log_file_path += "/";
@@ -1873,7 +1886,9 @@ engine_result_t OpenGameCore(engine_handle_t handle,
 #if defined(__EMSCRIPTEN__)
     std::string trace_path = TVPGetDefaultFileDir();
 #else
-    std::string trace_path = sidecar_root_path;
+    std::string trace_path = impl->log_root.empty()
+        ? sidecar_root_path
+        : impl->log_root;
 #endif
     if (!trace_path.empty() && trace_path.back() != '/') trace_path += "/";
     trace_path += "plugin_trace.log";
@@ -2980,6 +2995,30 @@ engine_result_t engine_set_option(engine_handle_t handle,
 
   // Handle fps_limit option: controls C++ side frame rate throttling
   const std::string key(option->key_utf8);
+  if (key == ENGINE_OPTION_LOG_ROOT) {
+    impl->log_root = option->value_utf8;
+    if (!impl->log_root.empty()) {
+      std::string log_file_path = impl->log_root;
+      if (log_file_path.back() != '/' && log_file_path.back() != '\\') {
+        log_file_path += "/";
+      }
+      log_file_path += "krkr2.log";
+      try {
+        AttachGameLogFileSink(log_file_path);
+        spdlog::info("engine_set_option: log_root={} file={}",
+                     impl->log_root, log_file_path);
+        spdlog::default_logger()->flush();
+      } catch (const std::exception& e) {
+        impl->last_error = std::string("failed to attach writable engine log: ") + e.what();
+        return SetThreadErrorAndReturn(ENGINE_RESULT_IO_ERROR,
+                                       impl->last_error.c_str());
+      }
+    }
+    ClearHandleErrorLocked(impl);
+    SetThreadError(nullptr);
+    return ENGINE_RESULT_OK;
+  }
+
   if (key == ENGINE_OPTION_FPS_LIMIT) {
     const int fps = std::atoi(option->value_utf8);
     impl->fps.limit = fps > 0 ? static_cast<uint32_t>(fps) : 0;
