@@ -301,6 +301,24 @@ final class LocalGameStorageTests: XCTestCase {
             XCTAssertEqual(error as? RTPStoreError, .invalidRPGMakerLayout)
         }
 
+        let emptyAssetRoot = fixture.container.appendingPathComponent(
+            "empty-asset-root",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: emptyAssetRoot.appendingPathComponent("Audio", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("not an asset".utf8).write(
+            to: emptyAssetRoot.appendingPathComponent("readme.txt")
+        )
+        do {
+            _ = try await storage.importRPGMakerRTP(variant: .vx, from: emptyAssetRoot)
+            XCTFail("Expected an empty standard asset directory to fail")
+        } catch {
+            XCTAssertEqual(error as? RTPStoreError, .invalidRPGMakerLayout)
+        }
+
         let valid = fixture.container.appendingPathComponent("valid", isDirectory: true)
         try writeRTPFixture(at: valid, sentinel: "vx")
         _ = try await storage.importRPGMakerRTP(variant: .vx, from: valid)

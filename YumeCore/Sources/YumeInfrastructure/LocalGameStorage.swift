@@ -852,16 +852,41 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
                 includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
                 options: [.skipsHiddenFiles]
             )
-            var directoryNames: Set<String> = []
+            let assetDirectoryNames: Set<String> = ["audio", "graphics", "fonts"]
             for child in children {
                 let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard values.isSymbolicLink != true else { continue }
-                if values.isDirectory == true {
-                    directoryNames.insert(child.lastPathComponent.lowercased())
+                guard values.isDirectory == true,
+                      assetDirectoryNames.contains(child.lastPathComponent.lowercased())
+                else { continue }
+
+                var enumerationError: Error?
+                guard let enumerator = fileManager.enumerator(
+                    at: child,
+                    includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                    options: [.skipsHiddenFiles],
+                    errorHandler: { _, error in
+                        enumerationError = error
+                        return false
+                    }
+                ) else {
+                    throw RTPStoreError.sourceUnreadable
+                }
+                while let asset = enumerator.nextObject() as? URL {
+                    let assetValues = try asset.resourceValues(
+                        forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+                    )
+                    if assetValues.isSymbolicLink == true {
+                        enumerator.skipDescendants()
+                    } else if assetValues.isRegularFile == true {
+                        return true
+                    }
+                }
+                if enumerationError != nil {
+                    throw RTPStoreError.sourceUnreadable
                 }
             }
-            let assetDirectoryNames: Set<String> = ["audio", "graphics", "fonts"]
-            return !directoryNames.isDisjoint(with: assetDirectoryNames)
+            return false
         }
 
         do {
