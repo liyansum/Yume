@@ -450,15 +450,20 @@ final class AppModel {
         rtpPackages = (try? await rtpStore.listRTPPackages()) ?? []
     }
 
-    func importRTPPackage(named name: String, engine: EngineID, from url: URL) async -> Bool {
+    func importRPGMakerRTP(
+        variant: RPGMakerRTPVariant,
+        from url: URL
+    ) async -> RTPStoreError? {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         do {
-            _ = try await rtpStore.importRTPPackage(named: name, engine: engine, from: url)
+            _ = try await rtpStore.importRPGMakerRTP(variant: variant, from: url)
             await refreshRTPPackages()
-            return true
+            return nil
+        } catch let error as RTPStoreError {
+            return error
         } catch {
-            return false
+            return .copyFailed
         }
     }
 

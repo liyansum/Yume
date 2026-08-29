@@ -3,9 +3,8 @@ import YumeDomain
 
 public protocol GameRuntimePackageStore: Sendable {
     func listRTPPackages() async throws -> [RTPPackage]
-    func importRTPPackage(
-        named name: String,
-        engine: EngineID,
+    func importRPGMakerRTP(
+        variant: RPGMakerRTPVariant,
         from directoryURL: URL
     ) async throws -> RTPPackage
     func removeRTPPackage(id: String) async throws

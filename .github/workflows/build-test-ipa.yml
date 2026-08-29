@@ -2,15 +2,6 @@ name: Build test IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "Yume.xcodeproj/**"
-      - "YumeApp/**"
-      - "YumeCore/**"
-      - "ThirdParty/**"
-      - "Scripts/**"
-      - ".github/workflows/build-test-ipa.yml"
 
 permissions:
   contents: read

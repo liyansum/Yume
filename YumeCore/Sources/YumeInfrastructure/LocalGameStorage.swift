@@ -743,17 +743,15 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         return try loadRTPIndex().packages
     }
 
-    public func importRTPPackage(
-        named name: String,
-        engine: EngineID,
+    public func importRPGMakerRTP(
+        variant: RPGMakerRTPVariant,
         from directoryURL: URL
     ) async throws -> RTPPackage {
-        guard RTPPackage.isValidName(name) else { throw RTPStoreError.invalidName }
         try await prepareStorage()
 
         var index = try loadRTPIndex()
-        guard !index.packages.contains(where: { $0.id == name }) else {
-            throw RTPStoreError.duplicateName
+        guard !index.packages.contains(where: { $0.variant == variant }) else {
+            throw RTPStoreError.duplicateVariant(variant)
         }
 
         let source = directoryURL.standardizedFileURL
@@ -761,21 +759,30 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
         guard fileManager.fileExists(atPath: source.path, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw RTPStoreError.sourceIsNotDirectory
         }
-        let summary = try summarizeTree(at: source)
+        let contentRoot = try resolveRPGMakerRTPRoot(at: source)
+        let summary: TreeSummary
+        do {
+            summary = try summarizeTree(at: contentRoot)
+        } catch {
+            throw RTPStoreError.sourceUnreadable
+        }
         guard summary.fileCount > 0 else { throw RTPStoreError.sourceIsEmpty }
 
+        let engine = EngineID(rawValue: "rgss")
+        let name = variant.packageID
         let engineDirectory = layout.rtp.appendingPathComponent(engine.rawValue, isDirectory: true)
         let destination = engineDirectory.appendingPathComponent(name, isDirectory: true)
         guard !fileManager.fileExists(atPath: destination.path) else {
-            throw RTPStoreError.duplicateName
+            throw RTPStoreError.duplicateVariant(variant)
         }
         try ensureManagedDirectory(engineDirectory, excludedFromBackup: true)
 
         do {
-            _ = try copyValidatedTree(from: source, to: destination)
+            _ = try copyValidatedTree(from: contentRoot, to: destination)
             let package = RTPPackage(
                 id: name,
                 engineID: engine,
+                variant: variant,
                 importedAt: Date(),
                 fileCount: summary.fileCount,
                 byteCount: summary.byteCount
@@ -785,7 +792,7 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             return package
         } catch {
             try? fileManager.removeItem(at: destination)
-            throw error
+            throw RTPStoreError.copyFailed
         }
     }
 
@@ -809,13 +816,113 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
 
     public func rtpMountRoots(for game: ImportedGame) async throws -> [URL] {
         try await prepareStorage()
+        let rgssVariant = try detectedRPGMakerRTPVariant(for: game)
         return try loadRTPIndex().packages
-            .filter { $0.engineID == game.engine.id }
+            .filter { package in
+                guard package.engineID == game.engine.id else { return false }
+                guard game.engine.id.rawValue == "rgss", let packageVariant = package.variant else {
+                    return true
+                }
+                return packageVariant == rgssVariant
+            }
             .map { package in
                 layout.rtp
                     .appendingPathComponent(package.engineID.rawValue, isDirectory: true)
                     .appendingPathComponent(package.id, isDirectory: true)
             }
+    }
+
+    /// Accepts either the actual RTP root or common wrappers such as
+    /// `VX Ace/app/Audio`. The source tree is inspected only; it is never
+    /// renamed, moved or otherwise modified.
+    private func resolveRPGMakerRTPRoot(at selectedRoot: URL) throws -> URL {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(
+            atPath: selectedRoot.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw RTPStoreError.sourceIsNotDirectory
+        }
+
+        func isRTPRoot(_ candidate: URL) throws -> Bool {
+            let children = try fileManager.contentsOfDirectory(
+                at: candidate,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            )
+            var directoryNames: Set<String> = []
+            for child in children {
+                let values = try child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isSymbolicLink != true else { continue }
+                if values.isDirectory == true {
+                    directoryNames.insert(child.lastPathComponent.lowercased())
+                }
+            }
+            return directoryNames.contains("audio") && directoryNames.contains("graphics")
+        }
+
+        do {
+            if try isRTPRoot(selectedRoot) { return selectedRoot }
+
+            let selectedComponents = selectedRoot.standardizedFileURL.pathComponents.count
+            let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+            guard let enumerator = fileManager.enumerator(
+                at: selectedRoot,
+                includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles],
+                errorHandler: { _, _ in false }
+            ) else {
+                throw RTPStoreError.sourceUnreadable
+            }
+
+            var candidates: [URL] = []
+            while let candidate = enumerator.nextObject() as? URL {
+                let depth = candidate.standardizedFileURL.pathComponents.count - selectedComponents
+                if depth > 3 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let values = try candidate.resourceValues(forKeys: Set(keys))
+                guard values.isSymbolicLink != true else {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard values.isDirectory == true else { continue }
+                if try isRTPRoot(candidate) {
+                    candidates.append(candidate)
+                    enumerator.skipDescendants()
+                }
+            }
+
+            guard let minimumDepth = candidates.map({
+                $0.standardizedFileURL.pathComponents.count
+            }).min() else {
+                throw RTPStoreError.invalidRPGMakerLayout
+            }
+            let nearest = candidates.filter {
+                $0.standardizedFileURL.pathComponents.count == minimumDepth
+            }
+            guard nearest.count == 1, let resolved = nearest.first else {
+                throw RTPStoreError.ambiguousRPGMakerLayout
+            }
+            return resolved
+        } catch let error as RTPStoreError {
+            throw error
+        } catch {
+            throw RTPStoreError.sourceUnreadable
+        }
+    }
+
+    private func detectedRPGMakerRTPVariant(for game: ImportedGame) throws -> RPGMakerRTPVariant? {
+        guard game.engine.id.rawValue == "rgss" else { return nil }
+        let manifest = try loadGameManifest(at: gameRootURL(for: game.id))
+        let paths = manifest.detection.evidence.map {
+            $0.relativePath.rawValue.lowercased()
+        }
+        if paths.contains(where: { $0.hasSuffix("scripts.rvdata2") }) { return .vxAce }
+        if paths.contains(where: { $0.hasSuffix("scripts.rvdata") }) { return .vx }
+        if paths.contains(where: { $0.hasSuffix("scripts.rxdata") }) { return .xp }
+        return nil
     }
 
     private func rtpIndexURL() -> URL {

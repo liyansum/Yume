@@ -175,6 +175,143 @@ final class LocalGameStorageTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: targetSentinel), Data("keep".utf8))
     }
 
+    func testRPGMakerRTPImportFindsWrappedAssetRootWithoutChangingSource() async throws {
+        let fixture = try TemporaryStorageFixture()
+        defer { fixture.remove() }
+        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let wrapper = fixture.container.appendingPathComponent("vx ace/app", isDirectory: true)
+        try writeRTPFixture(at: wrapper, sentinel: "ace")
+
+        let package = try await storage.importRPGMakerRTP(
+            variant: .vxAce,
+            from: wrapper.deletingLastPathComponent()
+        )
+
+        XCTAssertEqual(package.id, "rgss-vx-ace")
+        XCTAssertEqual(package.engineID, EngineID(rawValue: "rgss"))
+        XCTAssertEqual(package.variant, .vxAce)
+        XCTAssertEqual(package.fileCount, 2)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: storage.layout.rtp
+                    .appendingPathComponent("rgss/rgss-vx-ace/Audio/BGM/theme.ogg")
+                    .path
+            )
+        )
+        XCTAssertEqual(
+            try Data(contentsOf: wrapper.appendingPathComponent("Audio/BGM/theme.ogg")),
+            Data("ace".utf8)
+        )
+    }
+
+    func testRPGMakerRTPVariantsMountOnlyForMatchingRGSSGeneration() async throws {
+        let fixture = try TemporaryStorageFixture()
+        defer { fixture.remove() }
+        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let xpSource = fixture.container.appendingPathComponent("RTP XP", isDirectory: true)
+        let aceSource = fixture.container.appendingPathComponent("RTP VX Ace/app", isDirectory: true)
+        try writeRTPFixture(at: xpSource, sentinel: "xp")
+        try writeRTPFixture(at: aceSource, sentinel: "ace")
+        _ = try await storage.importRPGMakerRTP(variant: .xp, from: xpSource)
+        _ = try await storage.importRPGMakerRTP(
+            variant: .vxAce,
+            from: aceSource.deletingLastPathComponent()
+        )
+        let xpGame = try writeRGSSGame(
+            in: storage,
+            scriptsPath: "Data/Scripts.rxdata"
+        )
+        let aceGame = try writeRGSSGame(
+            in: storage,
+            scriptsPath: "Data/Scripts.rvdata2"
+        )
+
+        let xpMounts = try await storage.rtpMountRoots(for: xpGame)
+        let aceMounts = try await storage.rtpMountRoots(for: aceGame)
+
+        XCTAssertEqual(xpMounts.map(\.lastPathComponent), ["rgss-xp"])
+        XCTAssertEqual(aceMounts.map(\.lastPathComponent), ["rgss-vx-ace"])
+    }
+
+    func testRPGMakerRTPImportRejectsIncompleteAndDuplicatePackagesPrecisely() async throws {
+        let fixture = try TemporaryStorageFixture()
+        defer { fixture.remove() }
+        let storage = LocalGameStorage(baseURL: fixture.storageRoot)
+        let audioOnly = fixture.container.appendingPathComponent("Audio", isDirectory: true)
+        try FileManager.default.createDirectory(at: audioOnly, withIntermediateDirectories: true)
+        try Data("sound".utf8).write(to: audioOnly.appendingPathComponent("sound.ogg"))
+
+        do {
+            _ = try await storage.importRPGMakerRTP(variant: .vx, from: audioOnly)
+            XCTFail("Expected an incomplete RTP layout to fail")
+        } catch {
+            XCTAssertEqual(error as? RTPStoreError, .invalidRPGMakerLayout)
+        }
+
+        let valid = fixture.container.appendingPathComponent("valid", isDirectory: true)
+        try writeRTPFixture(at: valid, sentinel: "vx")
+        _ = try await storage.importRPGMakerRTP(variant: .vx, from: valid)
+        do {
+            _ = try await storage.importRPGMakerRTP(variant: .vx, from: valid)
+            XCTFail("Expected a duplicate generation to fail")
+        } catch {
+            XCTAssertEqual(error as? RTPStoreError, .duplicateVariant(.vx))
+        }
+    }
+
+    private func writeRTPFixture(at root: URL, sentinel: String) throws {
+        let audio = root.appendingPathComponent("Audio/BGM", isDirectory: true)
+        let graphics = root.appendingPathComponent("Graphics/System", isDirectory: true)
+        try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: graphics, withIntermediateDirectories: true)
+        try Data(sentinel.utf8).write(to: audio.appendingPathComponent("theme.ogg"))
+        try Data("window".utf8).write(to: graphics.appendingPathComponent("Window.png"))
+    }
+
+    private func writeRGSSGame(
+        in storage: LocalGameStorage,
+        scriptsPath: String
+    ) throws -> ImportedGame {
+        let engine = EngineDescriptor(
+            id: EngineID(rawValue: "rgss"),
+            displayName: "RGSS",
+            compatibilityVersion: "test"
+        )
+        let game = ImportedGame(
+            title: scriptsPath,
+            engine: engine,
+            compatibilityStatus: .runnable,
+            importedAt: Date(timeIntervalSince1970: 0),
+            installedByteCount: 1
+        )
+        let evidence = DetectionEvidence(
+            relativePath: try StorageRelativePath(rawValue: scriptsPath),
+            kind: .requiredFile,
+            detailCode: "rgss.scripts",
+            score: 100
+        )
+        let manifest = GameManifest(
+            game: game,
+            contentRoot: try StorageRelativePath(rawValue: "original"),
+            detection: ProbeResult(
+                engine: engine,
+                rootRelativePath: try StorageRelativePath(rawValue: "original"),
+                confidence: 100,
+                evidence: [evidence],
+                compatibility: CompatibilityReport(status: .runnable)
+            )
+        )
+        let gameRoot = storage.layout.games.appendingPathComponent(
+            game.id.rawValue.uuidString.lowercased(),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: gameRoot, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(manifest).write(to: gameRoot.appendingPathComponent("manifest.json"))
+        return game
+    }
+
     private func fixedTaskID(lastByte: UInt8) -> ImportTaskID {
         ImportTaskID(
             rawValue: UUID(uuid: (

@@ -8,9 +8,9 @@ struct RTPSettingsView: View {
 
     @State private var presentsEngineMenu = false
     @State private var presentsImporter = false
-    @State private var selectedEngine: GameEngineCatalogEntry?
+    @State private var selectedVariant: RPGMakerRTPVariant?
     @State private var removalCandidate: RTPPackage?
-    @State private var operationFailed = false
+    @State private var operationError: RTPStoreError?
 
     private var sortedPackages: [RTPPackage] {
         model.rtpPackages.sorted { $0.engineID.rawValue < $1.engineID.rawValue }
@@ -47,9 +47,9 @@ struct RTPSettingsView: View {
             isPresented: $presentsEngineMenu,
             titleVisibility: .visible
         ) {
-            ForEach(model.engineCatalog.entries) { entry in
-                Button(entry.descriptor.displayName) {
-                    selectedEngine = entry
+            ForEach(RPGMakerRTPVariant.allCases, id: \.self) { variant in
+                Button(variant.localizedNameKey) {
+                    selectedVariant = variant
                     presentsImporter = true
                 }
             }
@@ -61,25 +61,21 @@ struct RTPSettingsView: View {
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
-            defer { selectedEngine = nil }
+            defer { selectedVariant = nil }
             guard case let .success(urls) = result, let url = urls.first,
-                  let engine = selectedEngine
-            else { return }
-            let rawName = url.deletingPathExtension().lastPathComponent
-            let name = sanitize(rawName)
-            guard !name.isEmpty, name == rawName, RTPPackage.isValidName(name) else {
-                operationFailed = true
+                  let variant = selectedVariant
+            else {
+                if case .failure = result { operationError = .sourceUnreadable }
                 return
             }
             Task {
-                let imported = await model.importRTPPackage(named: name, engine: engine.descriptor.id, from: url)
-                if !imported { operationFailed = true }
+                operationError = await model.importRPGMakerRTP(variant: variant, from: url)
             }
         }
-        .alert("rtp.error.title", isPresented: $operationFailed) {
+        .alert("rtp.error.title", isPresented: operationErrorBinding) {
             Button("common.ok", role: .cancel) {}
         } message: {
-            Text("rtp.error.message")
+            Text(operationError?.localizedMessageKey ?? "rtp.error.unknown")
         }
         .alert(
             "rtp.delete.confirm.title",
@@ -90,7 +86,7 @@ struct RTPSettingsView: View {
                 if let candidate = removalCandidate {
                     Task {
                         if !(await model.removeRTPPackage(candidate)) {
-                            operationFailed = true
+                            operationError = .copyFailed
                         }
                     }
                 }
@@ -116,6 +112,11 @@ struct RTPSettingsView: View {
                         Text(package.engineID.rawValue)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        if let variant = package.variant {
+                            Text(variant.localizedNameKey)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     Text(package.byteCount, format: .byteCount(style: .file))
@@ -146,9 +147,37 @@ struct RTPSettingsView: View {
         )
     }
 
-    private func sanitize(_ value: String) -> String {
-        String(value.unicodeScalars.filter {
-            CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-").contains($0)
-        }.prefix(64))
+    private var operationErrorBinding: Binding<Bool> {
+        Binding(
+            get: { operationError != nil },
+            set: { presented in
+                if !presented { operationError = nil }
+            }
+        )
+    }
+}
+
+private extension RPGMakerRTPVariant {
+    var localizedNameKey: LocalizedStringKey {
+        switch self {
+        case .xp: "rtp.variant.xp"
+        case .vx: "rtp.variant.vx"
+        case .vxAce: "rtp.variant.vxAce"
+        }
+    }
+}
+
+private extension RTPStoreError {
+    var localizedMessageKey: LocalizedStringKey {
+        switch self {
+        case .duplicateName, .duplicateVariant: "rtp.error.duplicate"
+        case .sourceIsNotDirectory: "rtp.error.notDirectory"
+        case .sourceIsEmpty: "rtp.error.empty"
+        case .invalidRPGMakerLayout: "rtp.error.layout"
+        case .ambiguousRPGMakerLayout: "rtp.error.ambiguous"
+        case .sourceUnreadable: "rtp.error.unreadable"
+        case .copyFailed: "rtp.error.copy"
+        case .invalidName, .packageNotFound, .corruptIndex: "rtp.error.unknown"
+        }
     }
 }
