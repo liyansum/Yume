@@ -91,22 +91,41 @@ static void RenPyEmit(RenPySession *session, YumeRuntimeEventKind kind,
 }
 
 static RenPyGeneration DetectRenPyGeneration(NSString *root) {
-    NSArray<NSString *> *candidates = @[
-        @"game/script_version.txt", @"script_version.txt"
+    NSFileManager *files = NSFileManager.defaultManager;
+    NSArray<NSString *> *versionFiles = @[
+        @"game/script_version.txt", @"script_version.txt",
+        @"renpy/vc_version.py", @"game/renpy/vc_version.py"
     ];
-    for (NSString *relative in candidates) {
+    for (NSString *relative in versionFiles) {
         NSString *path = [root stringByAppendingPathComponent:relative];
         NSString *value = [NSString stringWithContentsOfFile:path
                                                    encoding:NSUTF8StringEncoding
                                                       error:nil];
-        if ([value containsString:@"(6,"] || [value containsString:@"(7,"]) {
+        if (value.length == 0) continue;
+        if ([value containsString:@"(8,"] || [value containsString:@"version = 8"]) {
+            return RenPyGeneration::Modern;
+        }
+        if ([value containsString:@"(6,"] || [value containsString:@"(7,"] ||
+            [value containsString:@"version = 7"] || [value containsString:@"version = 6"]) {
             return RenPyGeneration::Legacy;
         }
-        if ([value containsString:@"(8,"]) return RenPyGeneration::Modern;
     }
-    if ([[NSFileManager defaultManager]
-            fileExistsAtPath:[root stringByAppendingPathComponent:@"game/cache/bytecode-39.rpyb"]]) {
-        return RenPyGeneration::Modern;
+    NSArray<NSString *> *modernMarkers = @[
+        @"game/cache/bytecode-39.rpyb", @"game/cache/bytecode-312.rpyb",
+        @"lib/python3.9", @"lib/python3.10", @"lib/python3.11", @"lib/python3.12"
+    ];
+    for (NSString *relative in modernMarkers) {
+        if ([files fileExistsAtPath:[root stringByAppendingPathComponent:relative]]) {
+            return RenPyGeneration::Modern;
+        }
+    }
+    NSArray<NSString *> *legacyMarkers = @[
+        @"game/cache/bytecode-27.rpyb", @"lib/python2.7"
+    ];
+    for (NSString *relative in legacyMarkers) {
+        if ([files fileExistsAtPath:[root stringByAppendingPathComponent:relative]]) {
+            return RenPyGeneration::Legacy;
+        }
     }
     return RenPyGeneration::Modern;
 }
@@ -258,6 +277,7 @@ static int32_t RenPyStart(void *opaque) {
 
     setenv("RENPY_PATH_TO_SAVES", session->saveRoot.c_str(), 1);
     setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
+    setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
     setenv("RENPY_LOG_TO_STDOUT", "1", 1);
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
@@ -268,15 +288,18 @@ static int32_t RenPyStart(void *opaque) {
 
     std::string executable = launcher.UTF8String;
     dispatch_async(dispatch_get_main_queue(), ^{
+        AppendRenPyHostLog(session, "engine.sdl-main.begin");
         SDL_SetMainReady();
         std::string executableArgument = executable;
         std::string baseDirectoryOption = "--basedir";
-        std::string bundledBase = base.fileSystemRepresentation
-            ? std::string(base.fileSystemRepresentation) : std::string(base.UTF8String);
+        // --basedir is the imported project (the folder that contains game/).
+        // Bundled Python lives next to argv[0] / main.py via path_to_renpy_base().
+        std::string gameRoot = session->contentRoot;
+        AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
         char *arguments[] = {
             executableArgument.data(),
             baseDirectoryOption.data(),
-            bundledBase.data(),
+            gameRoot.data(),
             nullptr
         };
         int result = session->generation == RenPyGeneration::Modern

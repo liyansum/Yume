@@ -48,6 +48,13 @@ def path_to_gamedir(basedir, name):
         The basename of the executable, with the extension removed.
     """
 
+    override = os.environ.get("YUME_RENPY_GAMEDIR")
+    if override and os.path.isdir(override):
+        nested = os.path.join(override, "game")
+        if os.path.isdir(nested):
+            return nested
+        return override
+
     # A list of candidate game directory names.
     candidates = [ name ]
 
