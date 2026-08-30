@@ -1,6 +1,9 @@
 #import <Foundation/Foundation.h>
+#import <OpenGLES/EAGL.h>
+#import <QuartzCore/CAEAGLLayer.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
 
 #include <atomic>
 #include <cstdio>
@@ -221,6 +224,70 @@ static void PushSimpleEvent(Uint32 type) {
     (void)SDL_PushEvent(&event);
 }
 
+static __weak UIWindow *gYumeHostWindow;
+static __weak UIView *gYumeHostView;
+
+extern "C" void *YumeGetHostUIWindow(void) {
+    return (__bridge void *)gYumeHostWindow;
+}
+
+extern "C" void *YumeGetHostGameView(void) {
+    return (__bridge void *)gYumeHostView;
+}
+
+static UIView *YumeViewOwningLayer(CALayer *layer) {
+    if (layer == nil) return nil;
+    id delegate = layer.delegate;
+    if ([delegate isKindOfClass:[UIView class]]) {
+        UIView *view = (UIView *)delegate;
+        if (view.layer == layer) return view;
+    }
+    return nil;
+}
+
+static void YumeAttachEAGLDrawableToHost(id<EAGLDrawable> drawable) {
+    if (![drawable isKindOfClass:[CALayer class]]) return;
+    CALayer *layer = (CALayer *)drawable;
+    UIView *host = (__bridge UIView *)YumeGetHostGameView();
+    if (host == nil || host.window == nil || CGRectIsEmpty(host.bounds)) return;
+    UIView *glView = YumeViewOwningLayer(layer);
+    if (glView == nil || glView == host) return;
+    if (glView.superview == host) {
+        glView.frame = host.bounds;
+        return;
+    }
+    glView.frame = host.bounds;
+    glView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                              UIViewAutoresizingFlexibleHeight;
+    [host insertSubview:glView atIndex:0];
+    [host layoutIfNeeded];
+    [host.window layoutIfNeeded];
+    std::fprintf(stdout, "yume.eagl-host-bound host=%p view=%p bounds=%.0fx%.0f\n",
+                 (__bridge void *)host, (__bridge void *)glView,
+                 host.bounds.size.width, host.bounds.size.height);
+    std::fflush(stdout);
+}
+
+static BOOL (*YumeEAGLRenderbufferStorageIMP)(id, SEL, GLenum, id);
+
+static BOOL YumeEAGLRenderbufferStorageHook(id self, SEL selector, GLenum target,
+                                            id drawable) {
+    YumeAttachEAGLDrawableToHost(drawable);
+    return YumeEAGLRenderbufferStorageIMP(self, selector, target, drawable);
+}
+
+static void YumeInstallEAGLDrawableHook(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Method method = class_getInstanceMethod(
+            [EAGLContext class], @selector(renderbufferStorage:fromDrawable:));
+        if (method == nullptr) return;
+        YumeEAGLRenderbufferStorageIMP =
+            (BOOL (*)(id, SEL, GLenum, id))method_getImplementation(method);
+        method_setImplementation(method, (IMP)YumeEAGLRenderbufferStorageHook);
+    });
+}
+
 static UIWindow *FindSDLUIKitWindow(void) {
     SDL_Window *window = SDL_GetKeyboardFocus();
     if (window == nullptr) window = SDL_GetMouseFocus();
@@ -263,8 +330,12 @@ static UIWindow *FindSDLUIKitWindow(void) {
     if (_sdlStarted || _session == nullptr || self.window == nil) return;
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
+    YumeInstallEAGLDrawableHook();
+    gYumeHostWindow = self.window;
+    gYumeHostView = self;
     [self.window makeKeyAndVisible];
     AppendRenPyHostLog(_session, "view.in-window");
+    AppendRenPyHostLog(_session, "view.host-bound");
     RenPySession *session = _session;
     std::string executable = session->launcherPath;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -377,6 +448,8 @@ static UIWindow *FindSDLUIKitWindow(void) {
     UIWindow *window = _sdlWindow;
     _embeddedGameView = nil;
     _sdlWindow = nil;
+    gYumeHostWindow = nil;
+    gYumeHostView = nil;
     if (gameView != nil && window != nil) {
         [gameView removeFromSuperview];
         gameView.frame = window.bounds;
@@ -430,6 +503,7 @@ static int32_t RenPyCreate(const YumeRuntimeConfiguration *configuration,
 static int32_t RenPyStart(void *opaque) {
     auto *session = static_cast<RenPySession *>(opaque);
     if (session == nullptr || session->view == nil || session->running.exchange(true)) return -1;
+    YumeInstallEAGLDrawableHook();
     NSString *generation = session->generation == RenPyGeneration::Modern
         ? @"RenPyModern" : @"RenPyLegacy";
     NSURL *runtimeRoot = [[NSBundle mainBundle].resourceURL

@@ -78,6 +78,48 @@ void TVPReleaseFontLibrary() {
         FT_Done_FreeType(TVPFontLibrary);
     }
 }
+
+#if defined(__APPLE__) && TARGET_OS_IOS
+static TVPFontNamePathInfo *TVPBundledDefaultFontInfo() {
+    TVPFontNamePathInfo *info = TVPFontNames.Find(ttstr(TJS_W("default")));
+    if(!info && !TVPDefaultFontName.IsEmpty())
+        info = TVPFontNames.Find(TVPDefaultFontName);
+    return info;
+}
+
+// Device logs abort (signal 6) inside FreeType when opening some game
+// TTFs. Keep the bundled default.otf as the only rasterization source
+// and alias requested names onto it. Never store a game TTF path.
+static int TVPRegisterIOSFontAlias(const ttstr &FontPath,
+                                   std::vector<ttstr> *fontNames) {
+    TVPFontNamePathInfo *bundled = TVPBundledDefaultFontInfo();
+    if(!bundled) {
+        spdlog::warn("TVPEnumFontsProc ios-skip-ft: no bundled default for {}",
+                     FontPath.AsStdString());
+        spdlog::default_logger()->flush();
+        return 0;
+    }
+    std::string native = FontPath.AsStdString();
+    auto slash = native.find_last_of("/\\");
+    std::string leaf = slash == std::string::npos ? native
+                                                  : native.substr(slash + 1);
+    auto dot = leaf.find_last_of('.');
+    if(dot != std::string::npos && dot > 0)
+        leaf = leaf.substr(0, dot);
+    ttstr alias = leaf.empty() ? ttstr(TJS_W("default")) : ttstr(leaf.c_str());
+    TVPFontNames.Add(alias, *bundled);
+    TVPFontNames.Add(ttstr(TJS_W("default")), *bundled);
+    if(fontNames &&
+       std::find(fontNames->begin(), fontNames->end(), alias) ==
+           fontNames->end()) {
+        fontNames->emplace_back(alias);
+    }
+    spdlog::info("TVPEnumFontsProc faces=1 path={} alias={} (ios-skip-ft)",
+                 FontPath.AsStdString(), alias.AsStdString());
+    spdlog::default_logger()->flush();
+    return 1;
+}
+#endif
 //---------------------------------------------------------------------------
 static int TVPInternalEnumFonts(
     FT_Byte *pBuf, int buflen, const ttstr &FontPath,
@@ -86,6 +128,10 @@ static int TVPInternalEnumFonts(
     unsigned int faceCount = 0;
     if(pBuf == nullptr || buflen <= 0)
         return 0;
+#if defined(__APPLE__) && TARGET_OS_IOS
+    (void)getter;
+    return TVPRegisterIOSFontAlias(FontPath, fontNames);
+#endif
     try {
     FT_Face fontface = nullptr;
     FT_Error error =
@@ -213,9 +259,15 @@ static int TVPInternalEnumFonts(
  */
 int TVPEnumFontsProc(const ttstr &FontPath,
                      std::vector<ttstr> *fontNames) {
+    spdlog::info("TVPEnumFontsProc begin path={}", FontPath.AsStdString());
+    spdlog::default_logger()->flush();
     if(!TVPIsExistentStorageNoSearch(FontPath)) {
         return 0;
     }
+
+#if defined(__APPLE__) && TARGET_OS_IOS
+    return TVPRegisterIOSFontAlias(FontPath, fontNames);
+#endif
 
     tTJSBinaryStream *Stream = TVPCreateStream(FontPath, TJS_BS_READ);
     if(!Stream) {
@@ -235,7 +287,18 @@ int TVPEnumFontsProc(const ttstr &FontPath,
 }
 
 tTJSBinaryStream *TVPCreateFontStream(const ttstr &fontname) {
-    TVPFontNamePathInfo *info = TVPFindFont(fontname);
+    TVPFontNamePathInfo *info = nullptr;
+#if defined(__APPLE__) && TARGET_OS_IOS
+    // Rasterization must not open game TTFs. Always feed FreeType the
+    // bundled default.otf that survived TVPInitFontNames.
+    info = TVPBundledDefaultFontInfo();
+    if(info) {
+        spdlog::info("TVPCreateFontStream ios-force-bundled requested={} path={}",
+                     fontname.AsStdString(), info->Path.AsStdString());
+    }
+#endif
+    if(!info)
+        info = TVPFindFont(fontname);
     if(!info) {
         info = TVPFontNames.Find(TVPDefaultFontName);
         if(!info)

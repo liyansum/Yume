@@ -43,6 +43,7 @@
 #include "SysInitImpl.h"
 
 #include <cstdlib>
+#include <limits.h>
 
 #if defined(_WIN32)
 #undef GetClassName
@@ -410,8 +411,27 @@ static std::string TVPRestoreIOSPathCase(std::string posixPath) {
         addRoot(TVPNativeProjectDir.AsStdString());
     for(const auto &home : TVPGetIOSApplicationHomePaths().sourcePaths)
         addRoot(home);
-    if(const char *home = std::getenv("HOME"); home && home[0] != '\0')
+    if(const char *home = std::getenv("HOME"); home && home[0] != '\0') {
         addRoot(home);
+        std::string nested(home);
+        const char *marker = "/Documents/Data/Application/";
+        const auto markerAt = nested.find(marker);
+        if(markerAt != std::string::npos)
+            addRoot(nested.substr(0, markerAt + 10)); // .../Documents
+    }
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if(bundle) {
+        CFURLRef url = CFBundleCopyBundleURL(bundle);
+        if(url) {
+            char bundlePath[PATH_MAX] = {};
+            if(CFURLGetFileSystemRepresentation(
+                   url, true, reinterpret_cast<UInt8 *>(bundlePath),
+                   sizeof(bundlePath))) {
+                addRoot(bundlePath);
+            }
+            CFRelease(url);
+        }
+    }
 
     std::sort(roots.begin(), roots.end(),
               [](const std::string &left, const std::string &right) {

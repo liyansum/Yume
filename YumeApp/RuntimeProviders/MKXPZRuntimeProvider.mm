@@ -342,6 +342,10 @@ static void MKXPInfo(const char *message, void *context) {
     BOOL _sdlStarted;
 }
 
++ (Class)layerClass {
+    return [CAMetalLayer class];
+}
+
 - (instancetype)initWithSession:(MKXPSession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
@@ -365,6 +369,9 @@ static void MKXPInfo(const char *message, void *context) {
         metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
         metal.framebufferOnly = YES;
         metal.drawableSize = drawable;
+        metal.hidden = NO;
+        metal.opacity = 1;
+        metal.opaque = YES;
     }
     NSUInteger metalLayers = 0;
     for (CALayer *sublayer in parent.sublayers) {
@@ -373,6 +380,9 @@ static void MKXPInfo(const char *message, void *context) {
             child.frame = bounds;
             child.contentsScale = scale;
             child.drawableSize = drawable;
+            child.hidden = NO;
+            child.opacity = 1;
+            child.zPosition = 1;
             ++metalLayers;
         }
     }
