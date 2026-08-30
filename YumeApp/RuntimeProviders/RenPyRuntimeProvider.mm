@@ -1,3 +1,4 @@
+#define GLES_SILENCE_DEPRECATION 1
 #import <Foundation/Foundation.h>
 #import <OpenGLES/EAGL.h>
 #import <QuartzCore/CAEAGLLayer.h>
@@ -245,8 +246,8 @@ static UIView *YumeViewOwningLayer(CALayer *layer) {
     return nil;
 }
 
-static void YumeAttachEAGLDrawableToHost(id<EAGLDrawable> drawable) {
-    if (![drawable isKindOfClass:[CALayer class]]) return;
+static void YumeAttachEAGLDrawableToHost(id drawable) {
+    if (drawable == nil || ![drawable isKindOfClass:[CALayer class]]) return;
     CALayer *layer = (CALayer *)drawable;
     UIView *host = (__bridge UIView *)YumeGetHostGameView();
     if (host == nil || host.window == nil || CGRectIsEmpty(host.bounds)) return;
@@ -273,6 +274,7 @@ static BOOL (*YumeEAGLRenderbufferStorageIMP)(id, SEL, GLenum, id);
 static BOOL YumeEAGLRenderbufferStorageHook(id self, SEL selector, GLenum target,
                                             id drawable) {
     YumeAttachEAGLDrawableToHost(drawable);
+    if (YumeEAGLRenderbufferStorageIMP == nullptr) return NO;
     return YumeEAGLRenderbufferStorageIMP(self, selector, target, drawable);
 }
 
