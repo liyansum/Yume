@@ -955,6 +955,21 @@ struct GraphicsPrivate {
     
     void swapGLBuffer() {
         fpsLimiter.delay();
+        // LiveContainer does not composite ANGLE CAMetalLayer. Read the
+        // engine front buffer and let the host show it as a UIImage.
+        {
+            TEXFBO &fb = screen.getPP().frontBuffer();
+            const int w = fb.width;
+            const int h = fb.height;
+            if (w > 0 && h > 0) {
+                FBO::ID prevFBO = FBO::boundFramebufferID;
+                FBO::bind(fb.fbo);
+                std::vector<uint8_t> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+                gl.ReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+                FBO::bind(prevFBO);
+                mkxp_presentCPUFrame(pixels.data(), w, h);
+            }
+        }
         graphicsGL_SwapWindow(threadData->window);
 
         ++frameCount;

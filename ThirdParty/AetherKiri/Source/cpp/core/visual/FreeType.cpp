@@ -44,8 +44,6 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 #include <cmath>
-#include <setjmp.h>
-#include <signal.h>
 #include <unordered_map>
 #include <vector>
 #include "spdlog/spdlog.h"
@@ -60,10 +58,6 @@ FT_Library FreeTypeLibrary = nullptr; //!< FreeType ライブラリ
 static int FreeTypeRefCount = 0;
 
 #if defined(__APPLE__) && TARGET_OS_IOS
-static sigjmp_buf gFTJumpBuf;
-
-static void TVPFTAbortHandler(int) { siglongjmp(gFTJumpBuf, 1); }
-
 struct TVPIOSFontState {
     CTFontRef font = nullptr;
 };
@@ -348,27 +342,17 @@ bool tGenericFreeTypeFace::OpenFaceByIndex(tjs_uint index, FT_Face &face) {
     args.driver = 0;
 
 #if defined(__APPLE__) && TARGET_OS_IOS
-    struct sigaction neu {}, oldAbort {};
-    neu.sa_handler = TVPFTAbortHandler;
-    sigemptyset(&neu.sa_mask);
-    neu.sa_flags = 0;
-    sigaction(SIGABRT, &neu, &oldAbort);
-    FT_Error err = static_cast<FT_Error>(1);
-    if(sigsetjmp(gFTJumpBuf, 1) == 0) {
-        err = FT_Open_Face(FreeTypeLibrary, &args, index, &face);
-    } else {
-        face = nullptr;
-        err = static_cast<FT_Error>(1);
-        spdlog::error("FT_Open_Face aborted (signal 6) index={}",
-                      static_cast<int>(index));
-        spdlog::default_logger()->flush();
-    }
-    sigaction(SIGABRT, &oldAbort, nullptr);
+    // Device logs abort inside FT_Open_Face even for bundled OTF.
+    // Never call FreeType; tFreeTypeFace uses CoreText instead.
+    (void)index;
+    (void)args;
+    spdlog::info("FT_Open_Face skipped on iOS, CoreText fallback");
+    spdlog::default_logger()->flush();
+    return false;
 #else
     FT_Error err = FT_Open_Face(FreeTypeLibrary, &args, index, &face);
-#endif
-
     return err == 0;
+#endif
 }
 //---------------------------------------------------------------------------
 

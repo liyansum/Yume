@@ -274,29 +274,9 @@ static BOOL (*YumeEAGLRenderbufferStorageIMP)(id, SEL, GLenum, id);
 static BOOL YumeEAGLRenderbufferStorageHook(id self, SEL selector, GLenum target,
                                             id drawable) {
     YumeAttachEAGLDrawableToHost(drawable);
+    [CATransaction flush];
     if (YumeEAGLRenderbufferStorageIMP == nullptr) return NO;
-    id storage = drawable;
-    UIView *host = (__bridge UIView *)YumeGetHostGameView();
-    if (host != nil && [host.layer isKindOfClass:[CAEAGLLayer class]] &&
-        host.window != nil && !CGRectIsEmpty(host.bounds)) {
-        CAEAGLLayer *hostLayer = (CAEAGLLayer *)host.layer;
-        host.contentScaleFactor = host.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-        hostLayer.opaque = YES;
-        hostLayer.drawableProperties = @{
-            kEAGLDrawablePropertyRetainedBacking: @NO,
-            kEAGLDrawablePropertyColorFormat: kEAGLColorFormatRGBA8
-        };
-        [host.window makeKeyAndVisible];
-        [host layoutIfNeeded];
-        [CATransaction flush];
-        storage = hostLayer;
-        std::fprintf(stdout,
-                     "yume.eagl-use-host-layer window=%p bounds=%.0fx%.0f scale=%.2f\n",
-                     (__bridge void *)host.window, host.bounds.size.width,
-                     host.bounds.size.height, host.contentScaleFactor);
-        std::fflush(stdout);
-    }
-    BOOL ok = YumeEAGLRenderbufferStorageIMP(self, selector, target, storage);
+    BOOL ok = YumeEAGLRenderbufferStorageIMP(self, selector, target, drawable);
     std::fprintf(stdout, "yume.eagl-storage ok=%d\n", ok ? 1 : 0);
     std::fflush(stdout);
     return ok;
@@ -337,22 +317,12 @@ static UIWindow *FindSDLUIKitWindow(void) {
     BOOL _sdlStarted;
 }
 
-+ (Class)layerClass {
-    return [CAEAGLLayer class];
-}
-
 - (instancetype)initWithSession:(RenPySession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
-        CAEAGLLayer *layer = (CAEAGLLayer *)self.layer;
-        layer.opaque = YES;
-        layer.drawableProperties = @{
-            kEAGLDrawablePropertyRetainedBacking: @NO,
-            kEAGLDrawablePropertyColorFormat: kEAGLColorFormatRGBA8
-        };
     }
     return self;
 }

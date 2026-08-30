@@ -121,6 +121,11 @@ typedef void (*mkxp_ResumedCallback)(void *userdata);
 // (or fresh start). UI uses this to fade the snapshot / dismiss loading.
 typedef void (*mkxp_FrameRenderedCallback)(void *userdata);
 
+// LiveContainer cannot composite ANGLE's CAMetalLayer. The host
+// shows these RGBA frames in a UIImageView instead.
+typedef void (*mkxp_CPUFrameCallback)(const unsigned char *rgba, int width,
+                                      int height, void *userdata);
+
 typedef enum {
     MKXP_VALIGN_TOP        = 0,
     MKXP_VALIGN_TOP_CENTER = 1,
@@ -577,6 +582,8 @@ bool        mkxp_getSnapshotSize(int *width, int *height);
 void        mkxp_setPausedCallback(mkxp_PausedCallback cb, void *userdata);
 void        mkxp_setResumedCallback(mkxp_ResumedCallback cb, void *userdata);
 void        mkxp_setFrameRenderedCallback(mkxp_FrameRenderedCallback cb, void *userdata);
+void        mkxp_setCPUFrameCallback(mkxp_CPUFrameCallback cb, void *userdata);
+void        mkxp_presentCPUFrame(const unsigned char *rgba, int width, int height);
 
 // Engine-internal: fires the one-shot frame-rendered signal. NOT for UI.
 void        mkxp_signalFrameRendered(void);
@@ -765,6 +772,8 @@ static inline bool        mkxp_getSnapshotSize(int *width, int *height) { (void)
 static inline void        mkxp_setPausedCallback(mkxp_PausedCallback cb, void *userdata) { (void)cb; (void)userdata; }
 static inline void        mkxp_setResumedCallback(mkxp_ResumedCallback cb, void *userdata) { (void)cb; (void)userdata; }
 static inline void        mkxp_setFrameRenderedCallback(mkxp_FrameRenderedCallback cb, void *userdata) { (void)cb; (void)userdata; }
+static inline void        mkxp_setCPUFrameCallback(mkxp_CPUFrameCallback cb, void *userdata) { (void)cb; (void)userdata; }
+static inline void        mkxp_presentCPUFrame(const unsigned char *rgba, int width, int height) { (void)rgba; (void)width; (void)height; }
 static inline void        mkxp_signalFrameRendered(void) {}
 
 static inline void        mkxp_setGLContextBroken(void) {}

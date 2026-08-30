@@ -251,6 +251,8 @@ static BridgeCallback<mkxp_ResumedCallback> s_resumedCb;
 // the live SDL surface is visible and the snapshot can fade out.
 static std::atomic<bool> s_needsFrameRenderedSignal{false};
 static BridgeCallback<mkxp_FrameRenderedCallback> s_frameRenderedCb;
+static mkxp_CPUFrameCallback s_cpuFrameCb = nullptr;
+static void *s_cpuFrameUd = nullptr;
 
 extern "C" {
 
@@ -949,6 +951,17 @@ void mkxp_setResumedCallback(mkxp_ResumedCallback cb, void *userdata) {
 
 void mkxp_setFrameRenderedCallback(mkxp_FrameRenderedCallback cb, void *userdata) {
     s_frameRenderedCb.set(cb, userdata);
+}
+
+void mkxp_setCPUFrameCallback(mkxp_CPUFrameCallback cb, void *userdata) {
+    s_cpuFrameCb = cb;
+    s_cpuFrameUd = userdata;
+}
+
+void mkxp_presentCPUFrame(const unsigned char *rgba, int width, int height) {
+    if (s_cpuFrameCb == nullptr || rgba == nullptr || width <= 0 || height <= 0)
+        return;
+    s_cpuFrameCb(rgba, width, height, s_cpuFrameUd);
 }
 
 void mkxp_signalFrameRendered(void) {

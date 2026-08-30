@@ -1,3 +1,4 @@
+#import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -30,6 +31,7 @@ struct MKXPSession;
 - (instancetype)initWithSession:(MKXPSession *)session;
 - (void)startEngineIfAttached;
 - (void)syncHostMetalLayer;
+- (void)presentCPUFrame:(NSData *)data width:(int)width height:(int)height;
 - (void)detachSession;
 @end
 
@@ -296,6 +298,23 @@ static void ConfigureMKXP(MKXPSession *session) {
     }
 }
 
+static void MKXPPresentCPUFrame(const unsigned char *rgba, int width, int height,
+                                void *context) {
+    auto *session = static_cast<MKXPSession *>(context);
+    if (session == nullptr || session->view == nil || rgba == nullptr ||
+        width <= 0 || height <= 0) {
+        return;
+    }
+    const size_t nbytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+    NSData *data = [NSData dataWithBytes:rgba length:nbytes];
+    YumeMKXPHostView *view = session->view;
+    const int frameW = width;
+    const int frameH = height;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [view presentCPUFrame:data width:frameW height:frameH];
+    });
+}
+
 static void MKXPFirstFrame(void *context) {
     auto *session = static_cast<MKXPSession *>(context);
     AppendMKXPHostLog(session, "frame.first-frame");
@@ -340,10 +359,9 @@ static void MKXPInfo(const char *message, void *context) {
 @implementation YumeMKXPHostView {
     MKXPSession *_session;
     BOOL _sdlStarted;
-}
-
-+ (Class)layerClass {
-    return [CAMetalLayer class];
+    UIImageView *_frameView;
+    CAMetalLayer *_angleLayer;
+    BOOL _loggedCPUFrame;
 }
 
 - (instancetype)initWithSession:(MKXPSession *)session {
@@ -352,6 +370,17 @@ static void MKXPInfo(const char *message, void *context) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
+        _frameView = [[UIImageView alloc] initWithFrame:self.bounds];
+        _frameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                      UIViewAutoresizingFlexibleHeight;
+        _frameView.contentMode = UIViewContentModeScaleAspectFit;
+        _frameView.backgroundColor = UIColor.blackColor;
+        [self addSubview:_frameView];
+        _angleLayer = [CAMetalLayer layer];
+        _angleLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        _angleLayer.framebufferOnly = NO;
+        _angleLayer.hidden = YES;
+        [self.layer addSublayer:_angleLayer];
         [self syncHostMetalLayer];
     }
     return self;
@@ -359,40 +388,46 @@ static void MKXPInfo(const char *message, void *context) {
 
 - (void)syncHostMetalLayer {
     CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
-    CALayer *parent = self.layer;
-    parent.contentsScale = scale;
-    CGRect bounds = parent.bounds;
+    CGRect bounds = self.bounds;
     CGSize drawable = CGSizeMake(std::max(1.0, bounds.size.width * scale),
                                  std::max(1.0, bounds.size.height * scale));
-    if ([parent isKindOfClass:[CAMetalLayer class]]) {
-        CAMetalLayer *metal = (CAMetalLayer *)parent;
-        metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        metal.framebufferOnly = NO;
-        metal.drawableSize = drawable;
-        metal.hidden = NO;
-        metal.opacity = 1;
-        metal.opaque = YES;
-    }
-    NSUInteger metalLayers = 0;
-    for (CALayer *sublayer in parent.sublayers) {
-        if ([sublayer isKindOfClass:[CAMetalLayer class]]) {
-            CAMetalLayer *child = (CAMetalLayer *)sublayer;
-            child.frame = bounds;
-            child.contentsScale = scale;
-            child.drawableSize = drawable;
-            child.hidden = NO;
-            child.opacity = 1;
-            child.zPosition = 1;
-            ++metalLayers;
-        }
+    _frameView.frame = bounds;
+    if (_angleLayer != nil) {
+        _angleLayer.frame = bounds;
+        _angleLayer.contentsScale = scale;
+        _angleLayer.drawableSize = drawable;
+        _angleLayer.hidden = YES;
     }
     if (_session != nullptr && !CGRectIsEmpty(bounds)) {
         char line[160];
         std::snprintf(line, sizeof(line),
-                      "host.layer class=%s metalSublayers=%lu bounds=%.0fx%.0f",
-                      NSStringFromClass(parent.class).UTF8String ?: "?",
-                      (unsigned long)metalLayers,
+                      "host.layer class=%s cpuBlit=1 bounds=%.0fx%.0f",
+                      NSStringFromClass(self.layer.class).UTF8String ?: "?",
                       bounds.size.width, bounds.size.height);
+        AppendMKXPHostLog(_session, line);
+    }
+}
+
+- (void)presentCPUFrame:(NSData *)data width:(int)width height:(int)height {
+    if (data == nil || width <= 0 || height <= 0) return;
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef provider =
+        CGDataProviderCreateWithCFData((__bridge CFDataRef)data);
+    CGImageRef image = CGImageCreate(
+        width, height, 8, 32, static_cast<size_t>(width) * 4, colorSpace,
+        kCGBitmapByteOrder32Big | kCGImageAlphaLast, provider, nullptr, false,
+        kCGRenderingIntentDefault);
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(colorSpace);
+    if (image == nullptr) return;
+    UIImage *uiImage = [UIImage imageWithCGImage:image scale:1.0
+                                     orientation:UIImageOrientationUp];
+    CGImageRelease(image);
+    _frameView.image = uiImage;
+    if (!_loggedCPUFrame && _session != nullptr) {
+        _loggedCPUFrame = YES;
+        char line[96];
+        std::snprintf(line, sizeof(line), "cpu-frame.first %dx%d", width, height);
         AppendMKXPHostLog(_session, line);
     }
 }
@@ -407,7 +442,7 @@ static void MKXPInfo(const char *message, void *context) {
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
     [self syncHostMetalLayer];
-    mkxp_setHostNativeLayer((__bridge void *)self.layer);
+    mkxp_setHostNativeLayer((__bridge void *)_angleLayer);
     mkxp_setHostUIWindow((__bridge void *)self.window);
     const CGFloat scale = self.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
     // SDL on iOS treats window size as points. Passing pixels poisons
@@ -467,6 +502,7 @@ static void MKXPInfo(const char *message, void *context) {
 }
 
 - (void)detachSession {
+    mkxp_setCPUFrameCallback(nullptr, nullptr);
     mkxp_setHostNativeLayer(nullptr);
     mkxp_setHostUIWindow(nullptr);
     _session = nullptr;
@@ -544,6 +580,7 @@ static int32_t MKXPStart(void *opaque) {
     ConfigureMKXP(session);
     AppendMKXPHostLog(session, "start.configured");
     mkxp_setFrameRenderedCallback(MKXPFirstFrame, session);
+    mkxp_setCPUFrameCallback(MKXPPresentCPUFrame, session);
     mkxp_setPausedCallback(MKXPPaused, session);
     mkxp_setResumedCallback(MKXPResumed, session);
     mkxp_setEngineTerminatedCallback(MKXPTerminated, session);

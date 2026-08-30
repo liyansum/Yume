@@ -225,7 +225,9 @@ static int rgssThreadFunImpl(void *userdata) {
   ALCcontext *alcCtx = threadData->alcCtx;
   alcMakeContextCurrent(alcCtx);
 
+  mkxp_debugLog("INFO", "main.cpp", "sharedstate.init.begin");
   SharedState::initInstance(threadData);
+  mkxp_debugLog("INFO", "main.cpp", "sharedstate.init.end");
 
   mkxp_setGameReady();
 
@@ -255,7 +257,9 @@ static int rgssThreadFunImpl(void *userdata) {
    * binding via the global pointer; other versions go through the
    * per-version `_mkxp_get_script_binding_NN()` entry points
    * exported by their merged .o files. */
+  mkxp_debugLog("INFO", "main.cpp", "script-execute.begin");
   getActiveScriptBinding()->execute();
+  mkxp_debugLog("INFO", "main.cpp", "script-execute.end");
 
   rgssThreadShutdown(threadData);
 
