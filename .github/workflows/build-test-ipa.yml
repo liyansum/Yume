@@ -94,7 +94,10 @@ jobs:
             cd "$package_root"
             /usr/bin/zip -qry "$ipa" Payload
           )
-          shasum -a 256 "$ipa" > "$ipa.sha256"
+          (
+            cd "$(dirname "$ipa")"
+            shasum -a 256 "$(basename "$ipa")" > "$(basename "$ipa").sha256"
+          )
           unzip -t "$ipa"
           ls -lh "$ipa" "$ipa.sha256"
 
