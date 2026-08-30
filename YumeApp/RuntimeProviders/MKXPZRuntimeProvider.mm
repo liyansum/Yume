@@ -16,6 +16,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include <SDL.h>
+
 #include "../../YumeCore/Sources/CYumeRuntimeBridge/include/CYumeRuntimeBridge.h"
 #include "../../ThirdParty/MKXPZ/Source/src/app_bridge.h"
 
@@ -31,6 +33,9 @@ struct MKXPSession;
 - (instancetype)initWithSession:(MKXPSession *)session;
 - (void)startEngineIfAttached;
 - (void)syncHostMetalLayer;
+- (void)enqueueCPUFrameBytes:(const unsigned char *)rgba
+                       width:(int)width
+                      height:(int)height;
 - (void)presentCPUFrame:(NSData *)data width:(int)width height:(int)height;
 - (void)detachSession;
 @end
@@ -305,23 +310,16 @@ static void MKXPPresentCPUFrame(const unsigned char *rgba, int width, int height
         width <= 0 || height <= 0) {
         return;
     }
-    const size_t nbytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    NSData *data = [NSData dataWithBytes:rgba length:nbytes];
     YumeMKXPHostView *view = session->view;
-    const int frameW = width;
-    const int frameH = height;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [view presentCPUFrame:data width:frameW height:frameH];
-    });
+    [view enqueueCPUFrameBytes:rgba width:width height:height];
 }
 
 static void MKXPFirstFrame(void *context) {
     auto *session = static_cast<MKXPSession *>(context);
     AppendMKXPHostLog(session, "frame.first-frame");
+    YumeMKXPHostView *view = session != nullptr ? session->view : nil;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (session != nullptr && session->view != nil) {
-            [session->view syncHostMetalLayer];
-        }
+        [view syncHostMetalLayer];
     });
     MKXPEmit(session, YUME_RUNTIME_EVENT_FIRST_FRAME, "mkxp.first-frame");
 }
@@ -362,27 +360,30 @@ static void MKXPInfo(const char *message, void *context) {
     UIImageView *_frameView;
     CAMetalLayer *_angleLayer;
     BOOL _loggedCPUFrame;
+    std::atomic<bool> _cpuFramePending;
 }
 
 - (instancetype)initWithSession:(MKXPSession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
+        _cpuFramePending.store(false);
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
         _angleLayer = [CAMetalLayer layer];
         _angleLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         _angleLayer.framebufferOnly = NO;
         _angleLayer.opaque = YES;
-        _angleLayer.zPosition = -1;
+        _angleLayer.zPosition = 0;
         [self.layer addSublayer:_angleLayer];
         _frameView = [[UIImageView alloc] initWithFrame:self.bounds];
         _frameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                       UIViewAutoresizingFlexibleHeight;
         _frameView.contentMode = UIViewContentModeScaleAspectFit;
-        _frameView.backgroundColor = UIColor.blackColor;
-        _frameView.opaque = YES;
-        _frameView.layer.zPosition = 10;
+        _frameView.backgroundColor = UIColor.clearColor;
+        _frameView.opaque = NO;
+        _frameView.hidden = YES;
+        _frameView.layer.zPosition = 1;
         [self addSubview:_frameView];
         [self syncHostMetalLayer];
     }
@@ -400,7 +401,7 @@ static void MKXPInfo(const char *message, void *context) {
         _angleLayer.contentsScale = scale;
         _angleLayer.drawableSize = drawable;
         _angleLayer.hidden = NO;
-        _angleLayer.zPosition = -1;
+        _angleLayer.zPosition = 0;
     }
     if (_session != nullptr && !CGRectIsEmpty(bounds)) {
         char line[160];
@@ -410,6 +411,27 @@ static void MKXPInfo(const char *message, void *context) {
                       bounds.size.width, bounds.size.height);
         AppendMKXPHostLog(_session, line);
     }
+}
+
+- (void)enqueueCPUFrameBytes:(const unsigned char *)rgba
+                       width:(int)width
+                      height:(int)height {
+    if (rgba == nullptr || width <= 0 || height <= 0 ||
+        _cpuFramePending.exchange(true)) {
+        return;
+    }
+    const size_t byteCount = static_cast<size_t>(width) *
+                             static_cast<size_t>(height) * 4u;
+    NSData *data = [NSData dataWithBytes:rgba length:byteCount];
+    if (data == nil) {
+        _cpuFramePending.store(false);
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self->_session != nullptr)
+            [self presentCPUFrame:data width:width height:height];
+        self->_cpuFramePending.store(false);
+    });
 }
 
 - (void)presentCPUFrame:(NSData *)data width:(int)width height:(int)height {
@@ -428,6 +450,7 @@ static void MKXPInfo(const char *message, void *context) {
                                      orientation:UIImageOrientationUp];
     CGImageRelease(image);
     _frameView.image = uiImage;
+    _frameView.hidden = NO;
     if (!_loggedCPUFrame && _session != nullptr) {
         _loggedCPUFrame = YES;
         char line[96];
@@ -475,9 +498,11 @@ static void MKXPInfo(const char *message, void *context) {
         AppendMKXPHostLog(session, "engine.main-enter");
         SDL_SetMainReady();
         AppendMKXPHostLog(session, "engine.sdl-main.begin");
+        SDL_iPhoneSetEventPump(SDL_TRUE);
         char executable[] = "yume-mkxp-z";
         char *arguments[] = {executable, nullptr};
         (void)SDL_main(1, arguments);
+        SDL_iPhoneSetEventPump(SDL_FALSE);
         AppendMKXPHostLog(session, "engine.main-returned");
         session->mainReturned.store(true);
         session->running.store(false);

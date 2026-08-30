@@ -16,12 +16,12 @@
 #include <unistd.h>
 #include <vector>
 
+#include <SDL.h>
+
 #include "../../YumeCore/Sources/CYumeRuntimeBridge/include/CYumeRuntimeBridge.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/engine_api/include/engine_api.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/engine_api/include/engine_options.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/onscripter_runtime/include/onscripter_runtime.h"
-
-extern "C" void SDL_SetMainReady(void);
 
 @interface YumeAetherEngineWork : NSObject
 @property (nonatomic, copy) void (^block)(void);
@@ -287,7 +287,11 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (void)emitOnMain:(YumeRuntimeEventKind)kind code:(const char *)code {
     AetherSession *session = _session;
     const std::string copied = code != nullptr ? code : "";
-    dispatch_async(dispatch_get_main_queue(), ^{
+    if (NSThread.isMainThread) {
+        Emit(session, kind, copied.c_str());
+        return;
+    }
+    dispatch_sync(dispatch_get_main_queue(), ^{
         Emit(session, kind, copied.c_str());
     });
 }
@@ -331,6 +335,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     AppendHostLog(_session, "start.enter");
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.start.enter"];
     SDL_SetMainReady();
+    SDL_iPhoneSetEventPump(SDL_TRUE);
     AppendHostLog(_session, "start.sdl-ready");
     if (_session->kind == AetherRuntimeKind::ONScripter) {
         aetherkiri::onscripter::RegisterRuntimeProvider();
@@ -614,7 +619,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGFloat originY = (viewSize.height - contentHeight) * 0.5;
     const CGFloat mappedX = std::clamp((point.x - originX) / scale, 0.0, (double)_frameWidth - 1.0);
     const CGFloat mappedY = std::clamp((point.y - originY) / scale, 0.0, (double)_frameHeight - 1.0);
-    return CGPointMake(mappedX, (_frameHeight - 1.0) - mappedY);
+    // UIKit and Kirikiri both expose pointer coordinates from the logical
+    // top-left. The CPU framebuffer has a bottom-up row layout, but that is
+    // corrected only while presenting the image and must not leak into input.
+    return CGPointMake(mappedX, mappedY);
 }
 
 - (int32_t)sendPointerX:(double)x y:(double)y pressed:(BOOL)pressed {
@@ -631,7 +639,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.x = point.x;
         event.y = point.y;
         event.pointer_id = 0;
-        event.button = 1;
+        // Aether's input ABI follows SDL button numbering: 0 is primary/left,
+        // 1 is secondary/right. Touch must always synthesize the primary one.
+        event.button = 0;
         (void)engine_send_input(_engine, &event);
     } waitUntilDone:NO];
     return 0;
@@ -656,7 +666,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.x = point.x;
         event.y = point.y;
         event.pointer_id = pointerID;
-        event.button = 1;
+        event.button = 0;
         if (cancelled) event.modifiers = ENGINE_INPUT_MODIFIER_POINTER_CANCEL;
         (void)engine_send_input(_engine, &event);
     } waitUntilDone:NO];
@@ -691,6 +701,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         }
     } waitUntilDone:YES];
     _workerStopped.store(true);
+    SDL_iPhoneSetEventPump(SDL_FALSE);
     if (_session != nullptr) {
         _session->stopped.store(true);
         [self emitOnMain:YUME_RUNTIME_EVENT_STOPPED code:"aether.stopped"];

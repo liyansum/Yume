@@ -35,8 +35,10 @@ required_resources=(
     ThirdParty/BundledResources/Runtimes/AetherKiri/default.otf
     ThirdParty/BundledResources/Runtimes/RenPyModern/base/main.py
     ThirdParty/BundledResources/Runtimes/RenPyModern/base/environment.txt
+    ThirdParty/BundledResources/Runtimes/RenPyModern/base/lib/python3.12/site.pyc
     ThirdParty/BundledResources/Runtimes/RenPyLegacy/base/main.py
     ThirdParty/BundledResources/Runtimes/RenPyLegacy/base/environment.txt
+    ThirdParty/BundledResources/Runtimes/RenPyLegacy/base/lib/python2.7/site.pyo
     ThirdParty/BundledResources/Runtimes/Ruffle/index.html
     ThirdParty/BundledResources/Runtimes/Ruffle/ruffle.js
     ThirdParty/BundledResources/Assets.bundle/Shaders/simple.frag

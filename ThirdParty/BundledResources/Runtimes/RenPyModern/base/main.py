@@ -29,11 +29,16 @@ import os
 import sys
 import warnings
 
+print("yume.renpy-main.begin generation=modern")
+sys.stdout.flush()
+
 # Apply Yume's offline policy before Ren'Py or any game module is imported.
 _yume_environment = os.path.join(os.path.dirname(__file__), "environment.txt")
 with open(_yume_environment, "rb") as _yume_environment_file:
     exec(compile(_yume_environment_file.read(), _yume_environment, "exec"), globals(), globals())
 del _yume_environment, _yume_environment_file
+print("yume.renpy-main.offline-policy-ready")
+sys.stdout.flush()
 
 # Functions to be customized by distributors. ################################
 
@@ -237,6 +242,12 @@ def path_to_logdir(basedir):
     `basedir`
         The base directory (config.basedir)
     """
+
+    # Imported game trees are immutable. Keep log.txt, traceback.txt and
+    # related diagnostics beside Yume's per-game runtime logs instead.
+    override = os.environ.get("RENPY_LOGDIR")
+    if override:
+        return override
 
     import renpy # @UnresolvedImport
 

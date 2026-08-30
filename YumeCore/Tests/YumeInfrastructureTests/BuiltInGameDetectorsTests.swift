@@ -119,6 +119,23 @@ final class BuiltInGameDetectorsTests: XCTestCase {
         XCTAssertEqual(result.compatibility.status, .runnable)
     }
 
+    func testKirikiriTPMAllowsImportWithCompatibilityWarning() throws {
+        let snapshot = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["data.xp3", "plugin/shrinkCopy.tpm"],
+            directories: ["plugin"]
+        )
+        guard case let .selected(result) = BuiltInGameDetectors.registry.decide(snapshot) else {
+            return XCTFail("Expected Kirikiri detection")
+        }
+        XCTAssertEqual(result.engine.id.rawValue, "kirikiri")
+        XCTAssertEqual(result.compatibility.status, .partiallyCompatible)
+        XCTAssertEqual(result.compatibility.issues.count, 1)
+        XCTAssertEqual(result.compatibility.issues.first?.severity, .warning)
+        XCTAssertEqual(result.compatibility.issues.first?.relativePath?.rawValue,
+                       "plugin/shrinkCopy.tpm")
+    }
+
     func testNT2IsReportedAsUnsupportedONS() throws {
         let snapshot = DetectionSnapshot(
             rootRelativePath: try StorageRelativePath(rawValue: "original"),

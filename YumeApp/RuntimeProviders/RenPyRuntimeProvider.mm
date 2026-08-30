@@ -370,14 +370,26 @@ static UIWindow *FindSDLUIKitWindow(void) {
         // argv. A "--basedir" flag is treated as an unknown interpreter
         // option and exits 1 with no traceback. Ren'Py accepts the game
         // root as a positional basedir after it injects main.py.
+        // Ren'Py's iOS renderer list normally contains GLES only. LiveContainer
+        // cannot provide the extra EAGL drawable, so safe mode is placed after
+        // the positional basedir and makes Interface select the bundled
+        // software renderer without confusing launcher_main's Python options.
+        char safeMode[] = "--safe-mode";
         char *arguments[] = {
             executableArgument.data(),
             gameRoot.data(),
+            safeMode,
             nullptr
         };
+        // launcher_main is normally wrapped by SDL_RunApp, which enables the
+        // UIKit event pump before entering Python. Yume is already inside the
+        // host UIApplication, so reproduce that part without starting a
+        // second UIApplicationMain.
+        SDL_iPhoneSetEventPump(SDL_TRUE);
         int result = session->generation == RenPyGeneration::Modern
-            ? yume_renpy_modern_main(2, arguments)
-            : yume_renpy_legacy_main(2, arguments);
+            ? yume_renpy_modern_main(3, arguments)
+            : yume_renpy_legacy_main(3, arguments);
+        SDL_iPhoneSetEventPump(SDL_FALSE);
         std::string resultLine = "engine.main-returned result=" + std::to_string(result);
         AppendRenPyHostLog(session, resultLine.c_str());
         session->mainReturned.store(true);
@@ -508,15 +520,39 @@ static int32_t RenPyStart(void *opaque) {
     runtimeRoot = [runtimeRoot URLByAppendingPathComponent:generation isDirectory:YES];
     NSString *generationRoot = [runtimeRoot path];
     NSString *base = [generationRoot stringByAppendingPathComponent:@"base"];
-    if (![[NSFileManager defaultManager]
-            fileExistsAtPath:[base stringByAppendingPathComponent:@"main.py"]]) {
+    NSFileManager *fileManager = NSFileManager.defaultManager;
+    NSString *mainScript = [base stringByAppendingPathComponent:@"main.py"];
+    NSString *siteModule = session->generation == RenPyGeneration::Modern
+        ? [base stringByAppendingPathComponent:@"lib/python3.12/site.pyc"]
+        : [base stringByAppendingPathComponent:@"lib/python2.7/site.pyo"];
+    if (![fileManager fileExistsAtPath:mainScript] ||
+        ![fileManager fileExistsAtPath:siteModule]) {
         session->running.store(false);
         AppendRenPyHostLog(session, "start.failed resources-missing");
         RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.resources-missing");
         return -2;
     }
 
+    NSString *saveRoot = [NSString stringWithUTF8String:session->saveRoot.c_str()];
+    NSString *logRoot = [NSString stringWithUTF8String:session->logRoot.c_str()];
+    NSError *directoryError = nil;
+    if (saveRoot.length > 0)
+        [fileManager createDirectoryAtPath:saveRoot withIntermediateDirectories:YES
+                                attributes:nil error:&directoryError];
+    if (directoryError == nil && logRoot.length > 0)
+        [fileManager createDirectoryAtPath:logRoot withIntermediateDirectories:YES
+                                attributes:nil error:&directoryError];
+    if (directoryError != nil) {
+        session->running.store(false);
+        AppendRenPyHostLog(session,
+            ("start.failed writable-root " +
+             std::string(directoryError.localizedDescription.UTF8String ?: "unknown")).c_str());
+        RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.writable-root");
+        return -3;
+    }
+
     setenv("RENPY_PATH_TO_SAVES", session->saveRoot.c_str(), 1);
+    setenv("RENPY_LOGDIR", session->logRoot.c_str(), 1);
     setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
     setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
     setenv("RENPY_LOG_TO_STDOUT", "1", 1);
@@ -525,7 +561,9 @@ static int32_t RenPyStart(void *opaque) {
     // CAEAGLLayer if the game forces gl/gles.
     setenv("RENPY_RENDERER", "sw", 1);
     setenv("PYTHONHOME", base.UTF8String ?: "", 1);
-    AppendRenPyHostLog(session, "start.renderer=sw");
+    AppendRenPyHostLog(session, "start.renderer=sw safe-mode=1");
+    AppendRenPyHostLog(session, ("start.main=" + std::string(mainScript.UTF8String ?: "")).c_str());
+    AppendRenPyHostLog(session, ("start.site=" + std::string(siteModule.UTF8String ?: "")).c_str());
     InstallRenPyCrashBreadcrumb(session);
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");

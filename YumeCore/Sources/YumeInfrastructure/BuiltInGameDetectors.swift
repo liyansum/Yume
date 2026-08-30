@@ -47,6 +47,7 @@ public struct SignatureGameDetector: GameDetector, Sendable {
     public let requiredAny: [Rule]
     public let supporting: [Rule]
     public let blockingExtensions: Set<String>
+    public let warningExtensions: Set<String>
     public let runtimeAvailable: Bool
 
     public init(
@@ -54,12 +55,14 @@ public struct SignatureGameDetector: GameDetector, Sendable {
         requiredAny: [Rule],
         supporting: [Rule],
         blockingExtensions: Set<String> = [],
+        warningExtensions: Set<String> = [],
         runtimeAvailable: Bool = false
     ) {
         self.descriptor = descriptor
         self.requiredAny = requiredAny
         self.supporting = supporting
         self.blockingExtensions = blockingExtensions
+        self.warningExtensions = warningExtensions
         self.runtimeAvailable = runtimeAvailable
     }
 
@@ -100,6 +103,28 @@ public struct SignatureGameDetector: GameDetector, Sendable {
                     CompatibilityIssue(
                         id: "native-component:\(path)",
                         severity: .blocking,
+                        detailCode: "compatibility.nativeComponent",
+                        relativePath: relativePath
+                    )
+                )
+            }
+        }
+
+        for extensionName in warningExtensions.sorted() {
+            for path in snapshot.files(withExtension: extensionName) {
+                guard let relativePath = try? StorageRelativePath(rawValue: path) else { continue }
+                collectedEvidence.append(
+                    DetectionEvidence(
+                        relativePath: relativePath,
+                        kind: .unsupportedNativeComponent,
+                        detailCode: "native-component.\(extensionName)",
+                        score: 0
+                    )
+                )
+                issues.append(
+                    CompatibilityIssue(
+                        id: "native-component:\(path)",
+                        severity: .warning,
                         detailCode: "compatibility.nativeComponent",
                         relativePath: relativePath
                     )
@@ -242,7 +267,10 @@ public extension SignatureGameDetector {
             Rule(.fileExtension("ks"), kind: .characteristicFile, detailCode: "kirikiri.kagScript", score: 20),
             Rule(.fileExtension("tjs"), kind: .characteristicFile, detailCode: "kirikiri.tjs", score: 10)
         ],
-        blockingExtensions: ["tpm"],
+        // TPM files are optional native plug-ins. The sandbox cannot execute
+        // them, but many games also ship script/built-in fallbacks, so allow
+        // import and report partial compatibility instead of rejecting it.
+        warningExtensions: ["tpm"],
         runtimeAvailable: true
     )
 

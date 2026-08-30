@@ -63,11 +63,46 @@ struct TVPIOSFontState {
 };
 
 static std::unordered_map<const void *, TVPIOSFontState> gIOSFonts;
+static CGFontRef gIOSBundledGraphicsFont = nullptr;
+
+static void TVPLoadIOSBundledGraphicsFont(const ttstr &fontname) {
+    if(gIOSBundledGraphicsFont)
+        return;
+    TVPFontNamePathInfo *info = TVPFindFont(fontname);
+    if(!info)
+        info = TVPFindFont(TVPGetDefaultFontName());
+    if(!info)
+        return;
+    const std::string path = info->Path.AsStdString();
+    CFStringRef pathString = CFStringCreateWithCString(
+        kCFAllocatorDefault, path.c_str(), kCFStringEncodingUTF8);
+    if(!pathString)
+        return;
+    CFURLRef url = CFURLCreateWithFileSystemPath(
+        kCFAllocatorDefault, pathString, kCFURLPOSIXPathStyle, false);
+    CFRelease(pathString);
+    if(!url)
+        return;
+    CGDataProviderRef provider = CGDataProviderCreateWithURL(url);
+    CFRelease(url);
+    if(!provider)
+        return;
+    gIOSBundledGraphicsFont = CGFontCreateWithDataProvider(provider);
+    CGDataProviderRelease(provider);
+    if(gIOSBundledGraphicsFont) {
+        spdlog::info("CoreText loaded bundled font path={}", path);
+        spdlog::default_logger()->flush();
+    }
+}
 
 static CTFontRef TVPMakeIOSFont(int height) {
     const CGFloat size = height > 0 ? static_cast<CGFloat>(height) : 12;
-    CTFontRef font =
-        CTFontCreateWithName(CFSTR("PingFangSC-Regular"), size, nullptr);
+    CTFontRef font = gIOSBundledGraphicsFont
+        ? CTFontCreateWithGraphicsFont(gIOSBundledGraphicsFont, size, nullptr,
+                                       nullptr)
+        : nullptr;
+    if(!font)
+        font = CTFontCreateWithName(CFSTR("PingFangSC-Regular"), size, nullptr);
     if(!font)
         font = CTFontCreateWithName(CFSTR("HiraginoSans-W3"), size, nullptr);
     if(!font)
@@ -151,6 +186,12 @@ void TVPUninitializeFreeFont() {
         FT_Done_FreeType(FreeTypeLibrary);
         FreeTypeLibrary = nullptr;
     }
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(FreeTypeRefCount <= 0 && gIOSBundledGraphicsFont) {
+        CGFontRelease(gIOSBundledGraphicsFont);
+        gIOSBundledGraphicsFont = nullptr;
+    }
+#endif
 }
 
 //---------------------------------------------------------------------------
@@ -365,6 +406,9 @@ bool tGenericFreeTypeFace::OpenFaceByIndex(tjs_uint index, FT_Face &face) {
 tFreeTypeFace::tFreeTypeFace(const ttstr &fontname, tjs_uint32 options) :
     FontName(fontname) {
     TVPInitializeFont();
+#if defined(__APPLE__) && TARGET_OS_IOS
+    TVPLoadIOSBundledGraphicsFont(fontname);
+#endif
 
     // フィールドをクリア
     Face = nullptr;

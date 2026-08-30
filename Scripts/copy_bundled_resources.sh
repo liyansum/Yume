@@ -27,7 +27,9 @@ done
 
 required_outputs=(
     "$destination_root/Runtimes/RenPyModern/base/main.py"
+    "$destination_root/Runtimes/RenPyModern/base/lib/python3.12/site.pyc"
     "$destination_root/Runtimes/RenPyLegacy/base/main.py"
+    "$destination_root/Runtimes/RenPyLegacy/base/lib/python2.7/site.pyo"
     "$destination_root/Runtimes/Ruffle/ruffle.js"
     "$destination_root/Runtimes/AetherKiri/default.otf"
     "$destination_root/Ruby/3.1.0/English.rb"

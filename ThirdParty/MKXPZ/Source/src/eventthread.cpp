@@ -51,6 +51,10 @@ extern "C" bool mkxp_getTouchMouseEnabled(void);
 #include "debugwriter.h"
 
 #include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#include <CoreFoundation/CoreFoundation.h>
+#include <pthread.h>
+#endif
 #include "app_bridge.h"
 extern void mkxpGL_GetDrawableSize(SDL_Window *win, int *w, int *h);
 extern void mkxpGL_RefreshDrawableSize(SDL_Window *win, int *w, int *h);
@@ -225,9 +229,14 @@ void EventThread::process(RGSSThreadData &rtData)
     while (true)
     {
 #if TARGET_OS_IPHONE
-        /* Timed waits keep the main run loop spinning so SwiftUI
-         * alerts stay tappable while the engine session is alive. */
-        const int waitRc = SDL_WaitEventTimeout(&event, 16);
+        /* Yume hosts mkxp's SDL_main on UIKit's main thread. Merely using a
+         * timed SDL wait does not service blocks queued to the main dispatch
+         * queue (ANGLE uses those while creating its native layer), which can
+         * deadlock before the first frame and makes the player impossible to
+         * dismiss. Give UIKit/CoreAnimation a run-loop slice every iteration. */
+        if (pthread_main_np())
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.001, true);
+        const int waitRc = SDL_WaitEventTimeout(&event, 8);
         if (waitRc == 0)
             continue;
         if (waitRc < 0) {
