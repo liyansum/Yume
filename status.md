@@ -1,24 +1,21 @@
 # Yume 当前任务状态
 
-> 当前任务：修复 IPA 15 编译失败后重新出包
-> 状态：已把 EAGL drawable 参数改为 `id`，待提交并重跑 Actions
+> 当前任务：根据 build 15 设备日志修复 Kirikiri FreeType abort、Ren'Py EAGL/软件渲染
+> 状态：代码进行中，待 pretest / IPA 16
 > 最后更新：2026-08-30
 
-## 根因（build 14 日志，同一份 error.txt）
+## build 15 日志（Generated 2026-08-30T12:11:03Z）
 
-- Kirikiri：`startup.tjs` 对 `system_polyfill/font.ttf` 调 `AddFont`，FreeType `FT_New_Memory_Face` abort（signal 6）。
-- Ren'Py：脚本加载后 `Failed to create OpenGL ES drawable`（LiveContainer 不合成第二 UIWindow）。
-- RPG Maker：ANGLE Metal 子层已出现，无首帧。
+- Kirikiri：启动脚本完成，`native.first-frame` 已发出；随后 `TVPCreateFontStream` 打开捆绑 `default.otf` 时 FreeType abort（signal 6）。
+- Ren'Py：`yume.eagl-host-bound` 已出现，但 `renderbufferStorage` 仍失败。
+- mkxp：宿主已是 `CAMetalLayer`，graphics-init 成功，无首帧。
 
-## 已推送修复（IPA build 15）
+## 修复（IPA 16）
 
-- Kirikiri：游戏 TTF 只别名到捆绑 `default.otf`，`TVPCreateFontStream` 不再把游戏字体交给 FreeType。
-- Ren'Py：挂钩 `renderbufferStorage:fromDrawable:`，在创建 drawable 前把 GL view 插入宿主；SDL patch 同样插入 `YumeGetHostGameView()`。
-- mkxp：宿主 view `layerClass = CAMetalLayer`。
-- Pretest：129 tests passed。
+- Kirikiri：`FT_Open_Face` 用 SIGABRT 保护；失败则用 PingFang/Hiragino CoreText 栅格化。
+- Ren'Py：宿主 view 改为 `CAEAGLLayer` 作为 drawable；并设置 `RENPY_RENDERER=sw`。
+- mkxp：`framebufferOnly=NO`，便于 ANGLE 呈现。
 
 ## 下一步
 
-- 等 IPA 15 产物，装到 LiveContainer 后再导出日志。
-- 核对：Kirikiri `ios-skip-ft`；Ren'Py `yume.eagl-host-bound` 且无 GLES drawable 失败；mkxp `host.layer class=CAMetalLayer`。
-- 无新设备日志前不宣称运行时成功。
+- pretest、提交、dispatch IPA 16。无新设备日志前不宣称运行时成功。

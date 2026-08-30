@@ -38,12 +38,112 @@
 #endif
 #include "FontImpl.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_IOS
+#include <CoreGraphics/CoreGraphics.h>
+#include <CoreText/CoreText.h>
+#include <cmath>
+#include <setjmp.h>
+#include <signal.h>
+#include <unordered_map>
+#include <vector>
+#include "spdlog/spdlog.h"
+#endif
+#endif
+
 extern bool TVPEncodeUTF8ToUTF16(ttstr &output, const std::string &source);
 
 //---------------------------------------------------------------------------
 
 FT_Library FreeTypeLibrary = nullptr; //!< FreeType ライブラリ
 static int FreeTypeRefCount = 0;
+
+#if defined(__APPLE__) && TARGET_OS_IOS
+static sigjmp_buf gFTJumpBuf;
+
+static void TVPFTAbortHandler(int) { siglongjmp(gFTJumpBuf, 1); }
+
+struct TVPIOSFontState {
+    CTFontRef font = nullptr;
+};
+
+static std::unordered_map<const void *, TVPIOSFontState> gIOSFonts;
+
+static CTFontRef TVPMakeIOSFont(int height) {
+    const CGFloat size = height > 0 ? static_cast<CGFloat>(height) : 12;
+    CTFontRef font =
+        CTFontCreateWithName(CFSTR("PingFangSC-Regular"), size, nullptr);
+    if(!font)
+        font = CTFontCreateWithName(CFSTR("HiraginoSans-W3"), size, nullptr);
+    if(!font)
+        font = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, nullptr);
+    return font;
+}
+
+static CTFontRef TVPGetIOSFont(const void *face, int height) {
+    TVPIOSFontState &state = gIOSFonts[face];
+    if(!state.font)
+        state.font = TVPMakeIOSFont(height);
+    return state.font;
+}
+
+static void TVPReleaseIOSFont(const void *face) {
+    auto it = gIOSFonts.find(face);
+    if(it == gIOSFonts.end())
+        return;
+    if(it->second.font)
+        CFRelease(it->second.font);
+    gIOSFonts.erase(it);
+}
+
+static tTVPCharacterData *TVPCoreTextGlyph(const void *face, tjs_char code,
+                                           int height) {
+    CTFontRef font = TVPGetIOSFont(face, height);
+    if(!font)
+        return nullptr;
+    UniChar unichar = static_cast<UniChar>(code);
+    CGGlyph glyph = 0;
+    if(!CTFontGetGlyphsForCharacters(font, &unichar, &glyph, 1)) {
+        if(code == 0x20)
+            return nullptr;
+        unichar = 0x20;
+        if(!CTFontGetGlyphsForCharacters(font, &unichar, &glyph, 1))
+            return nullptr;
+    }
+    CGRect bbox = CTFontGetBoundingRectsForGlyphs(
+        font, kCTFontOrientationHorizontal, &glyph, nullptr, 1);
+    CGSize advance{};
+    CTFontGetAdvancesForGlyphs(font, kCTFontOrientationHorizontal, &glyph,
+                               &advance, 1);
+    const int width = std::max(1, static_cast<int>(std::ceil(bbox.size.width)) + 2);
+    const int rows = std::max(1, static_cast<int>(std::ceil(bbox.size.height)) + 2);
+    std::vector<tjs_uint8> pixels(static_cast<size_t>(width) * static_cast<size_t>(rows),
+                                  0);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceGray();
+    CGContextRef ctx = CGBitmapContextCreate(
+        pixels.data(), width, rows, 8, width, colorSpace, kCGImageAlphaNone);
+    CGColorSpaceRelease(colorSpace);
+    if(!ctx)
+        return nullptr;
+    CGContextSetGrayFillColor(ctx, 1.0, 1.0);
+    CGContextTranslateCTM(ctx, 0, rows);
+    CGContextScaleCTM(ctx, 1, -1);
+    const CGPoint pos = CGPointMake(1.0 - bbox.origin.x, 1.0 - bbox.origin.y);
+    CTFontDrawGlyphs(font, &glyph, &pos, 1, ctx);
+    CGContextRelease(ctx);
+    tGlyphMetrics metrics{};
+    metrics.CellIncX = static_cast<tjs_int>(std::lround(advance.width));
+    metrics.CellIncY = 0;
+    const int originx = static_cast<int>(std::floor(bbox.origin.x));
+    const int originy = static_cast<int>(
+        std::floor(CTFontGetAscent(font) - bbox.origin.y - bbox.size.height));
+    auto *data = new tTVPCharacterData(pixels.data(), width, originx, originy,
+                                       width, rows, metrics);
+    data->Gray = 256;
+    return data;
+}
+#endif
 void TVPInitializeFont() {
     if(FreeTypeLibrary == nullptr) {
         FT_Error err = FT_Init_FreeType(&FreeTypeLibrary);
@@ -148,8 +248,15 @@ tGenericFreeTypeFace::tGenericFreeTypeFace(const ttstr &fontname,
         // FreeType エンジンでファイルを開こうとしてみる
         tjs_uint index = TVP_GET_FACE_INDEX_FROM_OPTIONS(options);
         if(!OpenFaceByIndex(index, Face)) {
-            // フォントを開けなかった
+#if defined(__APPLE__) && TARGET_OS_IOS
+            Face = nullptr;
+            spdlog::error("tGenericFreeTypeFace iOS CoreText fallback for {}",
+                          fontname.AsStdString());
+            spdlog::default_logger()->flush();
+            return;
+#else
             TVPThrowExceptionMessage(TVPFontCannotBeUsed, fontname);
+#endif
         }
     } catch(...) {
         throw;
@@ -240,7 +347,26 @@ bool tGenericFreeTypeFace::OpenFaceByIndex(tjs_uint index, FT_Face &face) {
     args.stream = &Stream;
     args.driver = 0;
 
+#if defined(__APPLE__) && TARGET_OS_IOS
+    struct sigaction neu {}, oldAbort {};
+    neu.sa_handler = TVPFTAbortHandler;
+    sigemptyset(&neu.sa_mask);
+    neu.sa_flags = 0;
+    sigaction(SIGABRT, &neu, &oldAbort);
+    FT_Error err = static_cast<FT_Error>(1);
+    if(sigsetjmp(gFTJumpBuf, 1) == 0) {
+        err = FT_Open_Face(FreeTypeLibrary, &args, index, &face);
+    } else {
+        face = nullptr;
+        err = static_cast<FT_Error>(1);
+        spdlog::error("FT_Open_Face aborted (signal 6) index={}",
+                      static_cast<int>(index));
+        spdlog::default_logger()->flush();
+    }
+    sigaction(SIGABRT, &oldAbort, nullptr);
+#else
     FT_Error err = FT_Open_Face(FreeTypeLibrary, &args, index, &face);
+#endif
 
     return err == 0;
 }
@@ -281,6 +407,15 @@ tFreeTypeFace::tFreeTypeFace(const ttstr &fontname, tjs_uint32 options) :
         // 例外がここで発生する可能性があるので注意
     }
     FTFace = Face->GetFTFace();
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(!FTFace) {
+        TVPGetIOSFont(this, Height);
+        spdlog::info("tFreeTypeFace iOS CoreText fallback name={}",
+                     fontname.AsStdString());
+        spdlog::default_logger()->flush();
+        return;
+    }
+#endif
 
     // マッピングを確認する
     if(FTFace->charmap == nullptr) {
@@ -324,6 +459,9 @@ tFreeTypeFace::tFreeTypeFace(const ttstr &fontname, tjs_uint32 options) :
  * デストラクタ
  */
 tFreeTypeFace::~tFreeTypeFace() {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    TVPReleaseIOSFont(this);
+#endif
     if(GlyphIndexToCharcodeVector)
         delete GlyphIndexToCharcodeVector;
     if(Face)
@@ -405,6 +543,13 @@ void tFreeTypeFace::GetFaceNameList(std::vector<ttstr> &dest) {
  */
 void tFreeTypeFace::SetHeight(int height) {
     Height = height;
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(!FTFace) {
+        TVPReleaseIOSFont(this);
+        TVPGetIOSFont(this, Height);
+        return;
+    }
+#endif
     FT_Error err = FT_Set_Pixel_Sizes(FTFace, 0, Height);
     if(err) {
         // TODO: Error ハンドリング
@@ -413,6 +558,13 @@ void tFreeTypeFace::SetHeight(int height) {
 //---------------------------------------------------------------------------
 
 tjs_int tFreeTypeFace::GetLineBaseline() const {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(!FTFace) {
+        CTFontRef font = TVPGetIOSFont(this, Height);
+        return font ? static_cast<tjs_int>(std::lround(CTFontGetAscent(font)))
+                    : Height;
+    }
+#endif
     if(!FTFace || !FTFace->size)
         return 0;
     return krkr::font::ComputeLineBaseline(
@@ -429,6 +581,10 @@ tjs_int tFreeTypeFace::GetLineBaseline() const {
  *			nullptr の場合は変換に失敗した場合
  */
 tTVPCharacterData *tFreeTypeFace::GetGlyphFromCharcode(tjs_char code) {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if(!FTFace)
+        return TVPCoreTextGlyph(this, code, Height);
+#endif
     // グリフスロットにグリフを読み込み、寸法を取得する
     tGlyphMetrics metrics;
     if(!GetGlyphMetricsFromCharcode(code, metrics))

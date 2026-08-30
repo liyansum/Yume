@@ -275,7 +275,31 @@ static BOOL YumeEAGLRenderbufferStorageHook(id self, SEL selector, GLenum target
                                             id drawable) {
     YumeAttachEAGLDrawableToHost(drawable);
     if (YumeEAGLRenderbufferStorageIMP == nullptr) return NO;
-    return YumeEAGLRenderbufferStorageIMP(self, selector, target, drawable);
+    id storage = drawable;
+    UIView *host = (__bridge UIView *)YumeGetHostGameView();
+    if (host != nil && [host.layer isKindOfClass:[CAEAGLLayer class]] &&
+        host.window != nil && !CGRectIsEmpty(host.bounds)) {
+        CAEAGLLayer *hostLayer = (CAEAGLLayer *)host.layer;
+        host.contentScaleFactor = host.window.screen.nativeScale ?: UIScreen.mainScreen.nativeScale;
+        hostLayer.opaque = YES;
+        hostLayer.drawableProperties = @{
+            kEAGLDrawablePropertyRetainedBacking: @NO,
+            kEAGLDrawablePropertyColorFormat: kEAGLColorFormatRGBA8
+        };
+        [host.window makeKeyAndVisible];
+        [host layoutIfNeeded];
+        [CATransaction flush];
+        storage = hostLayer;
+        std::fprintf(stdout,
+                     "yume.eagl-use-host-layer window=%p bounds=%.0fx%.0f scale=%.2f\n",
+                     (__bridge void *)host.window, host.bounds.size.width,
+                     host.bounds.size.height, host.contentScaleFactor);
+        std::fflush(stdout);
+    }
+    BOOL ok = YumeEAGLRenderbufferStorageIMP(self, selector, target, storage);
+    std::fprintf(stdout, "yume.eagl-storage ok=%d\n", ok ? 1 : 0);
+    std::fflush(stdout);
+    return ok;
 }
 
 static void YumeInstallEAGLDrawableHook(void) {
@@ -313,12 +337,22 @@ static UIWindow *FindSDLUIKitWindow(void) {
     BOOL _sdlStarted;
 }
 
++ (Class)layerClass {
+    return [CAEAGLLayer class];
+}
+
 - (instancetype)initWithSession:(RenPySession *)session {
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
+        CAEAGLLayer *layer = (CAEAGLLayer *)self.layer;
+        layer.opaque = YES;
+        layer.drawableProperties = @{
+            kEAGLDrawablePropertyRetainedBacking: @NO,
+            kEAGLDrawablePropertyColorFormat: kEAGLColorFormatRGBA8
+        };
     }
     return self;
 }
@@ -525,7 +559,12 @@ static int32_t RenPyStart(void *opaque) {
     setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
     setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
     setenv("RENPY_LOG_TO_STDOUT", "1", 1);
+    // LiveContainer does not give EAGL backing to extra SDL windows.
+    // Prefer Ren'Py's software renderer; GLES still tries the host
+    // CAEAGLLayer if the game forces gl/gles.
+    setenv("RENPY_RENDERER", "sw", 1);
     setenv("PYTHONHOME", base.UTF8String ?: "", 1);
+    AppendRenPyHostLog(session, "start.renderer=sw");
     InstallRenPyCrashBreadcrumb(session);
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");

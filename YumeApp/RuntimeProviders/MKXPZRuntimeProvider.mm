@@ -367,7 +367,7 @@ static void MKXPInfo(const char *message, void *context) {
     if ([parent isKindOfClass:[CAMetalLayer class]]) {
         CAMetalLayer *metal = (CAMetalLayer *)parent;
         metal.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        metal.framebufferOnly = YES;
+        metal.framebufferOnly = NO;
         metal.drawableSize = drawable;
         metal.hidden = NO;
         metal.opacity = 1;
