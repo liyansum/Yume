@@ -370,17 +370,20 @@ static void MKXPInfo(const char *message, void *context) {
         _session = session;
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
+        _angleLayer = [CAMetalLayer layer];
+        _angleLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        _angleLayer.framebufferOnly = NO;
+        _angleLayer.opaque = YES;
+        _angleLayer.zPosition = -1;
+        [self.layer addSublayer:_angleLayer];
         _frameView = [[UIImageView alloc] initWithFrame:self.bounds];
         _frameView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
                                       UIViewAutoresizingFlexibleHeight;
         _frameView.contentMode = UIViewContentModeScaleAspectFit;
         _frameView.backgroundColor = UIColor.blackColor;
+        _frameView.opaque = YES;
+        _frameView.layer.zPosition = 10;
         [self addSubview:_frameView];
-        _angleLayer = [CAMetalLayer layer];
-        _angleLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        _angleLayer.framebufferOnly = NO;
-        _angleLayer.hidden = YES;
-        [self.layer addSublayer:_angleLayer];
         [self syncHostMetalLayer];
     }
     return self;
@@ -396,7 +399,8 @@ static void MKXPInfo(const char *message, void *context) {
         _angleLayer.frame = bounds;
         _angleLayer.contentsScale = scale;
         _angleLayer.drawableSize = drawable;
-        _angleLayer.hidden = YES;
+        _angleLayer.hidden = NO;
+        _angleLayer.zPosition = -1;
     }
     if (_session != nullptr && !CGRectIsEmpty(bounds)) {
         char line[160];

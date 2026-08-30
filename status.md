@@ -1,21 +1,17 @@
 # Yume 当前任务状态
 
-> 当前任务：修 RPG Maker LiveContainer 黑屏（CPU blit）并出 IPA 17
+> 当前任务：build 18 — Kirikiri 翻转/点击、Maker 露出 Metal 以便 shader、Ren'Py 不再强制 GLES
 > 状态：代码进行中
 > 最后更新：2026-08-30
 
-## build 16 日志
+## build 17 日志
 
-- RPG Maker：graphics-init 成功，无首帧；用户只看到虚拟按键。ANGLE `CAMetalLayer` 不被 LiveContainer 合成。
-- Kirikiri：`FT_Open_Face aborted` 后用户切走。
-- Ren'Py：`RENPY_RENDERER=sw` 仍走 GLES，`eagl-storage ok=0` 后 signal 11。
+- Kirikiri：已出画，画面上下颠倒；点击未进下一话。CPU 帧 origin 在底部。
+- RPG Maker：`sharedstate.init.begin` + graphics-init 后卡住，无 `sharedstate.init.end`（隐藏 Metal 层上编 shader）。
+- Ren'Py：`RENPY_RENDERER=sw` 仍被 GLES hint 带进 EAGL，`eagl-storage ok=0` 后 signal 11。
 
-## IPA 17 修复
+## IPA 18
 
-- mkxp：每帧 `glReadPixels` 前缓冲，画到宿主 `UIImageView`。ANGLE 的 Metal 层隐藏，只作 EGL 目标。
-- Kirikiri：iOS 上不再调用 `FT_Open_Face`，直接 CoreText。
-- Ren'Py：不再把宿主层当成 EAGL drawable（避免 SIGSEGV）。
-
-## 下一步
-
-- pretest、提交、dispatch。无新设备日志前不宣称成功。
+- Kirikiri：显示前垂直翻转像素，触摸 Y 同步翻转。
+- mkxp：ANGLE Metal 层保持可见（在 UIImageView 下面），shader.init 打日志。
+- Ren'Py：software hint，不再设 GLES / 不再挂钩 EAGL。

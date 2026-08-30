@@ -32,6 +32,7 @@
 
 
 #include "filesystem/filesystem.h"
+#include "app_bridge.h"
 #define INIT_SHADER(vert, frag, name) \
 { \
     std::string v = mkxp_fs::contentsOfAssetAsString("Shaders/" #vert, "vert"); \
@@ -138,6 +139,8 @@ void Shader::init(const unsigned char *vert, int vertSize,
                   const char *programName)
 {
 	GLint success;
+	if (programName != nullptr)
+		mkxp_debugLog("INFO", "shader.init", programName);
 
 	/* Compile vertex shader */
 	setupShaderSource(vertShader, GL_VERTEX_SHADER, vert, vertSize);

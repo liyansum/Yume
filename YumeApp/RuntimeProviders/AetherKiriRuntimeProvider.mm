@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #include "../../YumeCore/Sources/CYumeRuntimeBridge/include/CYumeRuntimeBridge.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/engine_api/include/engine_api.h"
@@ -463,6 +464,20 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         free(pixels);
         return;
     }
+    // DebugCpu stores scanlines with origin at the bottom. Flip so
+    // UIKit shows the scene right-side up and tap mapping matches.
+    {
+        auto *bytes = static_cast<uint8_t *>(pixels);
+        const size_t stride = frame.stride_bytes;
+        std::vector<uint8_t> row(stride);
+        for (uint32_t y = 0; y < frame.height / 2; ++y) {
+            uint8_t *top = bytes + static_cast<size_t>(y) * stride;
+            uint8_t *bottom = bytes + static_cast<size_t>(frame.height - 1 - y) * stride;
+            memcpy(row.data(), top, stride);
+            memcpy(top, bottom, stride);
+            memcpy(bottom, row.data(), stride);
+        }
+    }
 
     CGDataProviderRef provider = CGDataProviderCreateWithData(
         nullptr, pixels, byteCount, ReleaseFramePixels);
@@ -597,8 +612,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGFloat contentHeight = _frameHeight * scale;
     const CGFloat originX = (viewSize.width - contentWidth) * 0.5;
     const CGFloat originY = (viewSize.height - contentHeight) * 0.5;
-    return CGPointMake(std::clamp((point.x - originX) / scale, 0.0, (double)_frameWidth - 1.0),
-                       std::clamp((point.y - originY) / scale, 0.0, (double)_frameHeight - 1.0));
+    const CGFloat mappedX = std::clamp((point.x - originX) / scale, 0.0, (double)_frameWidth - 1.0);
+    const CGFloat mappedY = std::clamp((point.y - originY) / scale, 0.0, (double)_frameHeight - 1.0);
+    return CGPointMake(mappedX, (_frameHeight - 1.0) - mappedY);
 }
 
 - (int32_t)sendPointerX:(double)x y:(double)y pressed:(BOOL)pressed {

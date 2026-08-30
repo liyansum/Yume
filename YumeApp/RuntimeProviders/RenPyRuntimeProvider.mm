@@ -336,7 +336,6 @@ static UIWindow *FindSDLUIKitWindow(void) {
     if (_sdlStarted || _session == nullptr || self.window == nil) return;
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
-    YumeInstallEAGLDrawableHook();
     gYumeHostWindow = self.window;
     gYumeHostView = self;
     [self.window makeKeyAndVisible];
@@ -353,18 +352,11 @@ static UIWindow *FindSDLUIKitWindow(void) {
             (void)chdir(session->runtimeBasePath.c_str());
             AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
         }
-        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengles2");
-        SDL_SetHint("SDL_OPENGL_ES_DRIVER", "1");
+        // LiveContainer cannot create EAGL drawables. Do not force GLES;
+        // Ren'Py is launched with RENPY_RENDERER=sw.
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+        SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
         SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
-        SDL_GL_SetAttribute(SDL_GL_RETAINED_BACKING, 0);
-        SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-        SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
         SDL_SetMainReady();
         std::string executableArgument = executable;
         std::string gameRoot = session->contentRoot;
@@ -509,7 +501,6 @@ static int32_t RenPyCreate(const YumeRuntimeConfiguration *configuration,
 static int32_t RenPyStart(void *opaque) {
     auto *session = static_cast<RenPySession *>(opaque);
     if (session == nullptr || session->view == nil || session->running.exchange(true)) return -1;
-    YumeInstallEAGLDrawableHook();
     NSString *generation = session->generation == RenPyGeneration::Modern
         ? @"RenPyModern" : @"RenPyLegacy";
     NSURL *runtimeRoot = [[NSBundle mainBundle].resourceURL
