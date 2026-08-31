@@ -1,8 +1,16 @@
 # Yume 当前任务状态
 
 > 当前任务：IPA build 20 — 全部八类引擎的统一详细运行日志
-> 状态：本地预检通过，等待推送并触发 GitHub Actions `Build test IPA`
+> 状态：已推送；本地 130 项测试通过；GitHub Actions 真机构建、打包和上传通过
 > 最后更新：2026-08-31
+
+## 构建产物
+
+- 代码提交：`a71be68`（统一日志）、`93ea2bf`（补齐 mkxp SDL 初始化日志头）
+- GitHub Actions：`Build test IPA` run `33345733139`，结论 `success`
+- Artifact：`Yume-unsigned-IPA-48`
+- IPA：`Yume-0.1.0-20-unsigned.ipa`（build 20）
+- SHA-256：`eb8cdc3d6e0953fda6d31c0f76d7cf9cf8a365b7f6c938025e6fb116a8cbabb7`
 
 ## build 18 日志结论
 
