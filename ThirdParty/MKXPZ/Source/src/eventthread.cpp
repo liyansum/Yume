@@ -29,6 +29,7 @@ extern "C" void mkxp_fireTextInputModeCallback(int active);
 extern "C" bool mkxp_getGameControllerCaptureEnabled(void);
 extern "C" bool mkxp_getTouchMouseEnabled(void);
 
+#include <SDL.h>
 #include <SDL_events.h>
 #include <SDL_messagebox.h>
 #include <SDL_timer.h>
