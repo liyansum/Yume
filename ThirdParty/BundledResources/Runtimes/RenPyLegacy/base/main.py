@@ -39,6 +39,29 @@ del _yume_environment
 print("yume.renpy-main.offline-policy-ready")
 sys.stdout.flush()
 
+def _yume_log(stage, **details):
+    values = ["yume.renpy-main.stage=" + stage]
+    for key in sorted(details):
+        try:
+            value = repr(details[key]).replace("\n", "\\n")
+        except Exception:
+            value = "<unprintable>"
+        values.append("%s=%s" % (key, value))
+    print(" ".join(values))
+    sys.stdout.flush()
+
+_yume_log(
+    "environment",
+    executable=sys.executable,
+    version=sys.version,
+    argv=sys.argv,
+    cwd=os.getcwd(),
+    pythonhome=os.environ.get("PYTHONHOME"),
+    searchpath=os.environ.get("RENPY_SEARCHPATH"),
+    logdir=os.environ.get("RENPY_LOGDIR"),
+    renderer=os.environ.get("RENPY_RENDERER"),
+)
+
 # Functions to be customized by distributors. ################################
 
 def path_to_gamedir(basedir, name):
@@ -307,6 +330,8 @@ def main():
 
     renpy_base = path_to_renpy_base()
 
+    _yume_log("main.enter", renpy_base=renpy_base, path_count=len(sys.path))
+
     sys.path.append(renpy_base)
 
     # Ignore warnings.
@@ -314,8 +339,11 @@ def main():
 
     # Start Ren'Py proper.
     try:
+        _yume_log("bootstrap.import.begin")
         import renpy.bootstrap
-    except ImportError:
+        _yume_log("bootstrap.import.ready", renpy_file=getattr(renpy, "__file__", None))
+    except ImportError as error:
+        _yume_log("bootstrap.import.failed", error=error, path=sys.path)
         print("Could not import renpy.bootstrap. Please ensure you decompressed Ren'Py", file=sys.stderr)
         print("correctly, preserving the directory structure.", file=sys.stderr)
         raise
@@ -323,7 +351,16 @@ def main():
     # Set renpy.__main__ to this module.
     renpy.__main__ = sys.modules[__name__] # type: ignore
 
-    renpy.bootstrap.bootstrap(renpy_base)
+    _yume_log("bootstrap.call.begin", renpy_base=renpy_base)
+    try:
+        renpy.bootstrap.bootstrap(renpy_base)
+    except BaseException as error:
+        _yume_log("bootstrap.call.failed", error=error, error_type=type(error).__name__)
+        import traceback
+        traceback.print_exc()
+        sys.stderr.flush()
+        raise
+    _yume_log("bootstrap.call.returned")
 
 
 if __name__ == "__main__":

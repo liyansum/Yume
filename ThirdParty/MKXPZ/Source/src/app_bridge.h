@@ -125,6 +125,8 @@ typedef void (*mkxp_FrameRenderedCallback)(void *userdata);
 // shows these RGBA frames in a UIImageView instead.
 typedef void (*mkxp_CPUFrameCallback)(const unsigned char *rgba, int width,
                                       int height, void *userdata);
+typedef void (*mkxp_DebugLogCallback)(const char *tag, const char *source,
+                                      const char *message, void *userdata);
 
 typedef enum {
     MKXP_VALIGN_TOP        = 0,
@@ -613,6 +615,8 @@ void        mkxp_resetSessionState(void);
 
 // Set log file path for this session (NULL/"" to disable).
 void        mkxp_setDebugLogPath(const char *path);
+void        mkxp_setDebugLogCallback(mkxp_DebugLogCallback callback,
+                                     void *userdata);
 
 // Append a tagged log line (no-op if disabled).
 void        mkxp_debugLog(const char *tag, const char *source, const char *message);
@@ -784,6 +788,7 @@ static inline int         mkxp_getFastForwardMultiplier(void) { return 1; }
 static inline void        mkxp_resetSessionState(void) {}
 
 static inline void        mkxp_setDebugLogPath(const char *path) { (void)path; }
+static inline void        mkxp_setDebugLogCallback(mkxp_DebugLogCallback callback, void *userdata) { (void)callback; (void)userdata; }
 static inline void        mkxp_debugLog(const char *tag, const char *source, const char *message) { (void)tag; (void)source; (void)message; }
 static inline int         mkxp_debugLogEnabled(void) { return 0; }
 

@@ -1,6 +1,7 @@
 import SwiftUI
 @preconcurrency import WebKit
 import UniformTypeIdentifiers
+import QuartzCore
 import YumeApplication
 import YumeDomain
 import YumeEngineHost
@@ -213,6 +214,17 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                     DispatchQueue.main.async {
                         coordinator.handleResourceError(message, path: path)
                     }
+                },
+                onAccess: { [coordinator = context.coordinator] path, mimeType, bytes, requestCount, totalBytes in
+                    DispatchQueue.main.async {
+                        coordinator.handleResourceAccess(
+                            path: path,
+                            mimeType: mimeType,
+                            bytes: bytes,
+                            requestCount: requestCount,
+                            totalBytes: totalBytes
+                        )
+                    }
                 }
             ),
             forURLScheme: LocalGameSchemeHandler.scheme
@@ -254,7 +266,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
           document.dispatchEvent(new KeyboardEvent("keyup", options));
         })();
         """
-        webView.evaluateJavaScript(script)
+        context.coordinator.sendInput(script, keyCode: inputCommand.keyCode, webView: webView)
     }
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -267,6 +279,8 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         @Binding private var loadFailed: Bool
         private let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
         private let baseMetadata: [String: String]
+        private var navigationStartedAt: CFTimeInterval?
+        private var webMessageCount = 0
         var lastInputCommandID: UUID?
         var isSuspended = false
 
@@ -286,14 +300,53 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         }
 
         func handleWebMessage(_ kind: String, _ message: String, _ details: [String: String]) {
+            webMessageCount += 1
             let isError = kind == "error"
                 || kind == "unhandled-rejection"
                 || kind == "console-error"
-            onLog("web.\(kind)", isError, metadata(details, message: message))
+            var values = details
+            values["sequence"] = String(webMessageCount)
+            onLog("web.\(kind)", isError, metadata(values, message: message))
         }
 
         func handleResourceError(_ message: String, path: String) {
             onLog("web.resource-failed", true, metadata(["path": path], message: message))
+        }
+
+        func handleResourceAccess(
+            path: String,
+            mimeType: String,
+            bytes: Int64,
+            requestCount: UInt64,
+            totalBytes: UInt64
+        ) {
+            onLog(
+                "web.resource-served",
+                false,
+                metadata([
+                    "path": path,
+                    "mime": mimeType,
+                    "bytes": String(bytes),
+                    "requestCount": String(requestCount),
+                    "totalBytes": String(totalBytes)
+                ])
+            )
+        }
+
+        func sendInput(_ script: String, keyCode: Int, webView: WKWebView) {
+            let startedAt = CACurrentMediaTime()
+            webView.evaluateJavaScript(script) { [weak self] _, error in
+                guard let self else { return }
+                self.onLog(
+                    "web.input-dispatched",
+                    error != nil,
+                    self.metadata([
+                        "keyCode": String(keyCode),
+                        "elapsedMs": String(format: "%.2f", (CACurrentMediaTime() - startedAt) * 1_000),
+                        "error": error.map { String(describing: $0) } ?? "none"
+                    ])
+                )
+            }
         }
 
         func installNetworkBlockerAndLoad(
@@ -382,11 +435,47 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            navigationStartedAt = CACurrentMediaTime()
             onLog("web.navigation-started", false, metadata(["url": webView.url?.absoluteString ?? "unknown"]))
         }
 
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            onLog(
+                "web.navigation-committed",
+                false,
+                metadata([
+                    "url": webView.url?.absoluteString ?? "unknown",
+                    "progress": String(format: "%.3f", webView.estimatedProgress)
+                ])
+            )
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            onLog("web.navigation-finished", false, metadata(["url": webView.url?.absoluteString ?? "unknown"]))
+            let elapsed = navigationStartedAt.map { CACurrentMediaTime() - $0 }
+            onLog("web.navigation-finished", false, metadata([
+                "url": webView.url?.absoluteString ?? "unknown",
+                "title": webView.title ?? "",
+                "elapsedMs": elapsed.map { String(format: "%.2f", $0 * 1_000) } ?? "unknown",
+                "progress": String(format: "%.3f", webView.estimatedProgress)
+            ]))
+            webView.evaluateJavaScript("""
+                ({readyState: document.readyState,
+                  bodyChildren: document.body?.children.length ?? -1,
+                  canvasCount: document.querySelectorAll('canvas').length,
+                  canvasSizes: Array.from(document.querySelectorAll('canvas')).slice(0, 8).map(c => `${c.width}x${c.height}`),
+                  imageCount: document.images.length,
+                  completeImages: Array.from(document.images).filter(i => i.complete).length,
+                  scripts: document.scripts.length,
+                  href: location.href})
+                """) { [weak self] value, error in
+                guard let self else { return }
+                self.onLog(
+                    "web.document-snapshot",
+                    error != nil,
+                    self.metadata(["snapshot": String(describing: value ?? "none"),
+                                   "error": error.map { String(describing: $0) } ?? "none"])
+                )
+            }
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
@@ -536,6 +625,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
         private let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
         private var runtime: NativeRuntimeSession?
         private var eventTask: Task<Void, Never>?
+        private var logTask: Task<Void, Never>?
         private var attachTask: Task<Void, Never>?
         private var firstFrameWatchdog: Task<Void, Never>?
         private var isSuspended = false
@@ -582,6 +672,20 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                         onLog("native.failed", true, metadata(["code": code]))
                         loadFailed = true
                     }
+                }
+            }
+            logTask = Task { @MainActor [weak self] in
+                for await record in runtime.logs {
+                    guard let self else { return }
+                    onLog(
+                        "native.engine-log",
+                        record.level == .error,
+                        metadata([
+                            "level": record.level.rawValue,
+                            "source": record.subsystem,
+                            "detail": record.message
+                        ])
+                    )
                 }
             }
             attachTask = Task { @MainActor [weak self, weak container] in
@@ -638,6 +742,8 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
         func stop() {
             eventTask?.cancel()
             eventTask = nil
+            logTask?.cancel()
+            logTask = nil
             attachTask?.cancel()
             attachTask = nil
             firstFrameWatchdog?.cancel()
@@ -691,7 +797,11 @@ private final class WebDiagnosticsBridge: NSObject, WKScriptMessageHandler {
         let kind = String(describing: body["kind"] ?? "message")
         let detail = String(describing: body["message"] ?? "")
         var metadata: [String: String] = [:]
-        for key in ["source", "line", "column", "stack"] {
+        for key in [
+            "source", "line", "column", "stack", "readyState",
+            "bodyChildren", "canvasCount", "imageCount", "userAgent",
+            "viewport", "screen"
+        ] {
             if let value = body[key] {
                 metadata[key] = String(String(describing: value).prefix(4_000))
             }
@@ -739,7 +849,32 @@ private final class WebDiagnosticsBridge: NSObject, WKScriptMessageHandler {
                 message: text(event.reason),
                 stack: event.reason?.stack || ""
               }));
-              send({kind: "bridge-ready", message: location.href});
+              document.addEventListener("DOMContentLoaded", () => send({
+                kind: "dom-content-loaded",
+                message: location.href,
+                readyState: document.readyState,
+                bodyChildren: document.body?.children.length ?? -1
+              }), {once: true});
+              window.addEventListener("load", () => send({
+                kind: "window-loaded",
+                message: location.href,
+                readyState: document.readyState,
+                canvasCount: document.querySelectorAll("canvas").length,
+                imageCount: document.images.length
+              }), {once: true});
+              document.addEventListener("visibilitychange", () => send({
+                kind: "visibility-changed",
+                message: document.visibilityState,
+                readyState: document.readyState
+              }));
+              send({
+                kind: "bridge-ready",
+                message: location.href,
+                readyState: document.readyState,
+                userAgent: navigator.userAgent,
+                viewport: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
+                screen: `${screen.width}x${screen.height}`
+              });
             })();
             """,
             injectionTime: .atDocumentStart,
@@ -807,20 +942,25 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
     private let rootURL: URL
     private let additionalRoots: [String: URL]
     private let onError: @Sendable (_ message: String, _ path: String) -> Void
+    private let onAccess: @Sendable (_ path: String, _ mimeType: String, _ bytes: Int64, _ requestCount: UInt64, _ totalBytes: UInt64) -> Void
     private let queue = DispatchQueue(label: "com.yume.local-game-resources", qos: .userInitiated)
     private let lock = NSLock()
     private var stoppedTasks: Set<ObjectIdentifier> = []
+    private var requestCount: UInt64 = 0
+    private var totalBytes: UInt64 = 0
 
     init(
         gameID: UUID,
         rootURL: URL,
         additionalRoots: [String: URL] = [:],
-        onError: @escaping @Sendable (_ message: String, _ path: String) -> Void
+        onError: @escaping @Sendable (_ message: String, _ path: String) -> Void,
+        onAccess: @escaping @Sendable (_ path: String, _ mimeType: String, _ bytes: Int64, _ requestCount: UInt64, _ totalBytes: UInt64) -> Void
     ) {
         self.gameID = gameID
         self.rootURL = rootURL.standardizedFileURL
         self.additionalRoots = additionalRoots.mapValues(\.standardizedFileURL)
         self.onError = onError
+        self.onAccess = onAccess
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
@@ -926,6 +1066,15 @@ private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHan
             }
             guard !isStopped(identifier) else { return }
             task.didFinish()
+            let totals: (UInt64, UInt64) = lock.withLock {
+                requestCount += 1
+                totalBytes += UInt64(max(0, responseLength))
+                return (requestCount, totalBytes)
+            }
+            if totals.0 <= 100 || totals.0 % 100 == 0 {
+                onAccess(relativePath.rawValue, mimeType, responseLength,
+                         totals.0, totals.1)
+            }
         } catch {
             guard !isStopped(identifier) else { return }
             let requestedPath = task.request.url?.path ?? "unknown"

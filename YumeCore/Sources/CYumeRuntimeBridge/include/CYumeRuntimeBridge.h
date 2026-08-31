@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define YUME_RUNTIME_ABI_VERSION 1u
+#define YUME_RUNTIME_ABI_VERSION 2u
 
 typedef struct YumeRuntimeSession YumeRuntimeSession;
 
@@ -21,6 +21,19 @@ typedef enum YumeRuntimeEventKind {
     YUME_RUNTIME_EVENT_WARNING = 6,
     YUME_RUNTIME_EVENT_FAILED = 7
 } YumeRuntimeEventKind;
+
+typedef enum YumeRuntimeLogLevel {
+    YUME_RUNTIME_LOG_INFORMATION = 1,
+    YUME_RUNTIME_LOG_WARNING = 2,
+    YUME_RUNTIME_LOG_ERROR = 3
+} YumeRuntimeLogLevel;
+
+typedef void (*YumeRuntimeLogCallback)(
+    YumeRuntimeLogLevel level,
+    const char *subsystem,
+    const char *message,
+    void *context
+);
 
 typedef enum YumeRuntimeInputAction {
     YUME_RUNTIME_INPUT_UP = 1,
@@ -48,6 +61,8 @@ typedef struct YumeRuntimeConfiguration {
     const char *const *rtp_roots;
     size_t rtp_root_count;
     int32_t networking_allowed;
+    YumeRuntimeLogCallback log_callback;
+    void *log_callback_context;
 } YumeRuntimeConfiguration;
 
 typedef void (*YumeRuntimeEventCallback)(

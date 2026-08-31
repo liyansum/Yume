@@ -50,6 +50,8 @@ struct MKXPSession {
     MKXPRubyGeneration ruby = MKXPRubyGeneration::Ruby18;
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
+    YumeRuntimeLogCallback logCallback = nullptr;
+    void *logCallbackContext = nullptr;
     std::mutex callbackMutex;
     std::mutex logMutex;
     __strong YumeMKXPHostView *view = nil;
@@ -58,10 +60,23 @@ struct MKXPSession {
     std::atomic<bool> mainReturned{false};
     std::atomic<bool> destroyRequested{false};
     std::atomic<bool> stoppedEventSent{false};
+    std::atomic<uint64_t> cpuFrameCallbacks{0};
+    std::atomic<uint64_t> cpuFrameDrops{0};
+    std::atomic<uint64_t> cpuFramesPresented{0};
+    std::atomic<uint64_t> inputSequence{0};
 };
 
 static void AppendMKXPHostLog(MKXPSession *session, const char *message) {
-    if (session == nullptr || session->logRoot.empty()) return;
+    if (session == nullptr) return;
+    {
+        std::lock_guard<std::mutex> callbackLock(session->callbackMutex);
+        if (session->logCallback != nullptr) {
+            session->logCallback(YUME_RUNTIME_LOG_INFORMATION, "mkxp.host",
+                                 message != nullptr ? message : "",
+                                 session->logCallbackContext);
+        }
+    }
+    if (session->logRoot.empty()) return;
     std::lock_guard<std::mutex> lock(session->logMutex);
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
@@ -76,13 +91,36 @@ static void AppendMKXPHostLog(MKXPSession *session, const char *message) {
         NSString *detail = message != nullptr
             ? ([NSString stringWithUTF8String:message] ?: @"<invalid utf8>")
             : @"";
-        NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
-                          NSDate.date.timeIntervalSince1970, detail];
+        NSString *line = [NSString stringWithFormat:@"%.3f [mono=%.3f thread=%@] %@\n",
+                          NSDate.date.timeIntervalSince1970, CACurrentMediaTime(),
+                          NSThread.isMainThread ? @"main" : @"worker", detail];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         if (data != nil) fwrite(data.bytes, 1, data.length, file);
         fflush(file);
         fsync(fileno(file));
         fclose(file);
+    }
+}
+
+static void AppendMKXPPathSummary(MKXPSession *session, const char *label,
+                                  const std::string &path) {
+    @autoreleasepool {
+        NSString *value = [NSString stringWithUTF8String:path.c_str()];
+        BOOL isDirectory = NO;
+        const BOOL exists = value.length > 0 &&
+            [[NSFileManager defaultManager] fileExistsAtPath:value
+                                                 isDirectory:&isDirectory];
+        NSArray<NSString *> *children = exists && isDirectory
+            ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:value error:nil]
+            : nil;
+        char line[512];
+        std::snprintf(line, sizeof(line),
+                      "path.%s exists=%d directory=%d readable=%d writable=%d children=%lu value=%s",
+                      label, exists ? 1 : 0, isDirectory ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isReadableFileAtPath:value] ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isWritableFileAtPath:value] ? 1 : 0,
+                      static_cast<unsigned long>(children.count), path.c_str());
+        AppendMKXPHostLog(session, line);
     }
 }
 
@@ -146,14 +184,11 @@ static void ReleaseMKXPClaimAfterFailedCreation(void) {
 static void MKXPEmit(MKXPSession *session, YumeRuntimeEventKind kind,
                      const char *code) {
     if (session == nullptr) return;
-    YumeRuntimeEventCallback callback = nullptr;
-    void *context = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(session->callbackMutex);
-        callback = session->callback;
-        context = session->callbackContext;
+    std::lock_guard<std::mutex> lock(session->callbackMutex);
+    if (session->callback != nullptr) {
+        session->callback(kind, code != nullptr ? code : "",
+                          session->callbackContext);
     }
-    if (callback != nullptr) callback(kind, code != nullptr ? code : "", context);
 }
 
 static MKXPRGSSGeneration DetectRGSSGeneration(NSString *root) {
@@ -259,6 +294,26 @@ static NSString *ConfigOverlayJSON(const std::vector<std::string> &rtpRoots,
     return data != nil ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : @"{}";
 }
 
+static void MKXPDebugLogMirror(const char *tag, const char *source,
+                               const char *message, void *context) {
+    auto *session = static_cast<MKXPSession *>(context);
+    if (session == nullptr) return;
+    const std::string tagValue = tag != nullptr ? tag : "";
+    const YumeRuntimeLogLevel level =
+        tagValue == "FATAL" || tagValue == "ERROR"
+            ? YUME_RUNTIME_LOG_ERROR
+            : (tagValue == "WARN" ? YUME_RUNTIME_LOG_WARNING
+                                   : YUME_RUNTIME_LOG_INFORMATION);
+    std::string detail = "[" + tagValue + "] (" +
+        std::string(source != nullptr ? source : "") + ") " +
+        std::string(message != nullptr ? message : "");
+    std::lock_guard<std::mutex> lock(session->callbackMutex);
+    if (session->logCallback != nullptr) {
+        session->logCallback(level, "mkxp.engine", detail.c_str(),
+                             session->logCallbackContext);
+    }
+}
+
 static void ConfigureMKXP(MKXPSession *session) {
     NSFileManager *files = NSFileManager.defaultManager;
     NSString *sharedFonts = [NSString stringWithUTF8String:session->derivedRoot.c_str()];
@@ -301,6 +356,7 @@ static void ConfigureMKXP(MKXPSession *session) {
         NSString *logPath = [logRoot stringByAppendingPathComponent:@"mkxp-z.log"];
         mkxp_setDebugLogPath(logPath.fileSystemRepresentation);
     }
+    mkxp_setDebugLogCallback(MKXPDebugLogMirror, session);
 }
 
 static void MKXPPresentCPUFrame(const unsigned char *rgba, int width, int height,
@@ -361,6 +417,7 @@ static void MKXPInfo(const char *message, void *context) {
     CAMetalLayer *_angleLayer;
     BOOL _loggedCPUFrame;
     std::atomic<bool> _cpuFramePending;
+    CGSize _lastLoggedBounds;
 }
 
 - (instancetype)initWithSession:(MKXPSession *)session {
@@ -403,21 +460,36 @@ static void MKXPInfo(const char *message, void *context) {
         _angleLayer.hidden = NO;
         _angleLayer.zPosition = 0;
     }
-    if (_session != nullptr && !CGRectIsEmpty(bounds)) {
+    if (_session != nullptr && !CGRectIsEmpty(bounds) &&
+        !CGSizeEqualToSize(_lastLoggedBounds, bounds.size)) {
         char line[160];
         std::snprintf(line, sizeof(line),
                       "host.layer class=%s cpuBlit=1 bounds=%.0fx%.0f",
                       NSStringFromClass(self.layer.class).UTF8String ?: "?",
                       bounds.size.width, bounds.size.height);
         AppendMKXPHostLog(_session, line);
+        _lastLoggedBounds = bounds.size;
     }
 }
 
 - (void)enqueueCPUFrameBytes:(const unsigned char *)rgba
                        width:(int)width
                       height:(int)height {
-    if (rgba == nullptr || width <= 0 || height <= 0 ||
-        _cpuFramePending.exchange(true)) {
+    MKXPSession *session = _session;
+    if (session != nullptr) session->cpuFrameCallbacks.fetch_add(1);
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        AppendMKXPHostLog(session, "cpu-frame.invalid");
+        return;
+    }
+    if (_cpuFramePending.exchange(true)) {
+        if (session != nullptr) {
+            const uint64_t drops = session->cpuFrameDrops.fetch_add(1) + 1;
+            if (drops == 1 || drops % 120u == 0u) {
+                AppendMKXPHostLog(session, ("cpu-frame.dropped total=" +
+                    std::to_string(drops) + " callbacks=" +
+                    std::to_string(session->cpuFrameCallbacks.load())).c_str());
+            }
+        }
         return;
     }
     const size_t byteCount = static_cast<size_t>(width) *
@@ -451,10 +523,22 @@ static void MKXPInfo(const char *message, void *context) {
     CGImageRelease(image);
     _frameView.image = uiImage;
     _frameView.hidden = NO;
+    const uint64_t presented = _session != nullptr
+        ? _session->cpuFramesPresented.fetch_add(1) + 1 : 0;
     if (!_loggedCPUFrame && _session != nullptr) {
         _loggedCPUFrame = YES;
         char line[96];
         std::snprintf(line, sizeof(line), "cpu-frame.first %dx%d", width, height);
+        AppendMKXPHostLog(_session, line);
+    }
+    if (_session != nullptr && presented % 120u == 0u) {
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "cpu-frame.stats callbacks=%llu presented=%llu dropped=%llu size=%dx%d pending=%d",
+                      static_cast<unsigned long long>(_session->cpuFrameCallbacks.load()),
+                      static_cast<unsigned long long>(presented),
+                      static_cast<unsigned long long>(_session->cpuFrameDrops.load()),
+                      width, height, _cpuFramePending.load() ? 1 : 0);
         AppendMKXPHostLog(_session, line);
     }
 }
@@ -497,13 +581,22 @@ static void MKXPInfo(const char *message, void *context) {
     dispatch_async(dispatch_get_main_queue(), ^{
         AppendMKXPHostLog(session, "engine.main-enter");
         SDL_SetMainReady();
-        AppendMKXPHostLog(session, "engine.sdl-main.begin");
+        AppendMKXPHostLog(session, ("engine.sdl-main.begin wasInit=" +
+            std::to_string(SDL_WasInit(0)) + " videoDriver=" +
+            std::string(SDL_GetCurrentVideoDriver() ?: "<none>")).c_str());
         SDL_iPhoneSetEventPump(SDL_TRUE);
         char executable[] = "yume-mkxp-z";
         char *arguments[] = {executable, nullptr};
-        (void)SDL_main(1, arguments);
+        const CFTimeInterval startedAt = CACurrentMediaTime();
+        const int mainResult = SDL_main(1, arguments);
         SDL_iPhoneSetEventPump(SDL_FALSE);
-        AppendMKXPHostLog(session, "engine.main-returned");
+        AppendMKXPHostLog(session, ("engine.main-returned result=" +
+            std::to_string(mainResult) + " elapsed=" +
+            std::to_string(CACurrentMediaTime() - startedAt) + " sdlError=" +
+            std::string(SDL_GetError() ?: "<none>") + " callbacks=" +
+            std::to_string(session->cpuFrameCallbacks.load()) + " presented=" +
+            std::to_string(session->cpuFramesPresented.load()) + " dropped=" +
+            std::to_string(session->cpuFrameDrops.load())).c_str());
         session->mainReturned.store(true);
         session->running.store(false);
         [session->view detachSession];
@@ -531,6 +624,7 @@ static void MKXPInfo(const char *message, void *context) {
 }
 
 - (void)detachSession {
+    mkxp_setDebugLogCallback(nullptr, nullptr);
     mkxp_setCPUFrameCallback(nullptr, nullptr);
     mkxp_setHostNativeLayer(nullptr);
     mkxp_setHostUIWindow(nullptr);
@@ -570,10 +664,16 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
     }
     session->callback = callback;
     session->callbackContext = context;
+    session->logCallback = configuration->log_callback;
+    session->logCallbackContext = configuration->log_callback_context;
     NSString *root = [NSString stringWithUTF8String:session->contentRoot.c_str()];
     session->rgss = DetectRGSSGeneration(root);
     session->ruby = RubyGenerationForRGSS(session->rgss);
     AppendMKXPHostLog(session, "session.created");
+    AppendMKXPPathSummary(session, "content", session->contentRoot);
+    AppendMKXPPathSummary(session, "save", session->saveRoot);
+    AppendMKXPPathSummary(session, "derived", session->derivedRoot);
+    AppendMKXPPathSummary(session, "logs", session->logRoot);
     std::string generation = "rgss.generation=";
     generation += RGSSGenerationLabel(session->rgss);
     generation += session->ruby == MKXPRubyGeneration::Ruby19
@@ -586,6 +686,7 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
     for (const auto &rtpRoot : session->rtpRoots) {
         std::string line = "rtp.mount=" + rtpRoot;
         AppendMKXPHostLog(session, line.c_str());
+        AppendMKXPPathSummary(session, "rtp", rtpRoot);
     }
     session->view = [[YumeMKXPHostView alloc] initWithSession:session];
     if (session->view == nil) {
@@ -627,12 +728,14 @@ static int32_t MKXPPause(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || !session->running.load()) return -1;
     mkxp_requestPause();
+    AppendMKXPHostLog(session, "lifecycle.pause-requested");
     return 0;
 }
 static int32_t MKXPResume(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || !session->running.load()) return -1;
     mkxp_requestResume();
+    AppendMKXPHostLog(session, "lifecycle.resume-requested");
     return 0;
 }
 
@@ -661,20 +764,41 @@ static int32_t MKXPSendButton(void *opaque, YumeRuntimeInputAction action,
     const int key = MKXPScancode(action);
     if (session == nullptr || !session->running.load() || key == MKXP_SCANCODE_UNKNOWN) return -1;
     mkxp_injectKeyEvent(key, pressed != 0 ? 1 : 0);
+    const uint64_t sequence = session->inputSequence.fetch_add(1) + 1;
+    AppendMKXPHostLog(session, ("input.key sequence=" + std::to_string(sequence) +
+        " action=" + std::to_string(static_cast<int>(action)) + " scancode=" +
+        std::to_string(key) + " pressed=" + std::to_string(pressed != 0)).c_str());
     return 0;
 }
-static int32_t MKXPSendPointer(void *, double, double, int32_t) {
+static int32_t MKXPSendPointer(void *opaque, double x, double y, int32_t pressed) {
+    auto *session = static_cast<MKXPSession *>(opaque);
+    if (session != nullptr) {
+        const uint64_t sequence = session->inputSequence.fetch_add(1) + 1;
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "input.pointer sequence=%llu ignored=1 x=%.1f y=%.1f pressed=%d",
+                      static_cast<unsigned long long>(sequence), x, y,
+                      pressed != 0 ? 1 : 0);
+        AppendMKXPHostLog(session, line);
+    }
     return 0;
 }
 static int32_t MKXPSendText(void *opaque, const char *text) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || !session->running.load() || text == nullptr) return -1;
     mkxp_pushTextInput(text);
+    const uint64_t sequence = session->inputSequence.fetch_add(1) + 1;
+    AppendMKXPHostLog(session, ("input.text sequence=" + std::to_string(sequence) +
+        " bytes=" + std::to_string(std::strlen(text))).c_str());
     return 0;
 }
 static int32_t MKXPStop(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || !session->running.load()) return 0;
+    AppendMKXPHostLog(session, ("lifecycle.stop-requested callbacks=" +
+        std::to_string(session->cpuFrameCallbacks.load()) + " presented=" +
+        std::to_string(session->cpuFramesPresented.load()) + " inputs=" +
+        std::to_string(session->inputSequence.load())).c_str());
     mkxp_requestTerminate();
     return 0;
 }
@@ -685,11 +809,15 @@ static void *MKXPNativeView(void *opaque) {
 static void MKXPDestroy(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr) return;
+    AppendMKXPHostLog(session, "lifecycle.destroy-requested");
     {
         std::lock_guard<std::mutex> lock(session->callbackMutex);
         session->callback = nullptr;
         session->callbackContext = nullptr;
+        session->logCallback = nullptr;
+        session->logCallbackContext = nullptr;
     }
+    mkxp_setDebugLogCallback(nullptr, nullptr);
     session->destroyRequested.store(true);
     (void)MKXPStop(session);
     if (session->mainReturned.load() || !session->running.load()) {

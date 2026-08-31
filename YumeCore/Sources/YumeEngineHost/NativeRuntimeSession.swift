@@ -10,11 +10,30 @@ public enum NativeRuntimeHostError: Error, Sendable, Equatable {
     case operationFailed(operation: String, code: Int32)
 }
 
+public struct NativeRuntimeLogRecord: Sendable, Equatable {
+    public let level: AppRuntimeLogLevel
+    public let subsystem: String
+    public let message: String
+
+    public init(level: AppRuntimeLogLevel, subsystem: String, message: String) {
+        self.level = level
+        self.subsystem = subsystem
+        self.message = message
+    }
+}
+
+public enum AppRuntimeLogLevel: String, Sendable, Equatable {
+    case information
+    case warning
+    case error
+}
+
 /// Swift owner for the narrow C ABI shared by all statically linked native
 /// runtimes. Providers keep their engine headers and global state behind the
 /// ABI, while the App receives only lifecycle events and an opaque UIView.
 public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     public let events: AsyncStream<EngineEvent>
+    public let logs: AsyncStream<NativeRuntimeLogRecord>
 
     private let runtimeIdentifier: String
     private let sink: NativeRuntimeEventSink
@@ -34,8 +53,13 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     ) throws {
         self.runtimeIdentifier = runtimeIdentifier
         let pair = AsyncStream<EngineEvent>.makeStream()
+        let logPair = AsyncStream<NativeRuntimeLogRecord>.makeStream()
         events = pair.stream
-        sink = NativeRuntimeEventSink(continuation: pair.continuation)
+        logs = logPair.stream
+        sink = NativeRuntimeEventSink(
+            continuation: pair.continuation,
+            logContinuation: logPair.continuation
+        )
         callbackContext = Unmanaged.passRetained(sink).toOpaque()
 
         guard Self.isAvailable(runtimeIdentifier: runtimeIdentifier) else {
@@ -44,7 +68,11 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         }
 
         var creationError: Int32 = 0
-        handle = Self.withConfiguration(game: game, context: context) { configuration in
+        handle = Self.withConfiguration(
+            game: game,
+            context: context,
+            logCallbackContext: callbackContext
+        ) { configuration in
             runtimeIdentifier.withCString { identifier in
                 yume_runtime_session_create(
                     identifier,
@@ -165,9 +193,30 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         }
     }
 
+    private static let receiveLog: @convention(c) (
+        YumeRuntimeLogLevel,
+        UnsafePointer<CChar>?,
+        UnsafePointer<CChar>?,
+        UnsafeMutableRawPointer?
+    ) -> Void = { level, subsystem, message, context in
+        guard let context else { return }
+        let sink = Unmanaged<NativeRuntimeEventSink>.fromOpaque(context).takeUnretainedValue()
+        let mappedLevel: AppRuntimeLogLevel = switch level {
+        case YUME_RUNTIME_LOG_WARNING: .warning
+        case YUME_RUNTIME_LOG_ERROR: .error
+        default: .information
+        }
+        sink.yieldLog(NativeRuntimeLogRecord(
+            level: mappedLevel,
+            subsystem: subsystem.map(String.init(cString:)) ?? "native",
+            message: message.map(String.init(cString:)) ?? "<empty>"
+        ))
+    }
+
     private static func withConfiguration<Result>(
         game: PreparedGame,
         context: EngineContext,
+        logCallbackContext: UnsafeMutableRawPointer,
         _ body: (inout YumeRuntimeConfiguration) -> Result
     ) -> Result {
         game.contentRootURL.path.withCString { contentRoot in
@@ -186,7 +235,9 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
                                         locale_identifier: locale,
                                         rtp_roots: buffer.baseAddress,
                                         rtp_root_count: buffer.count,
-                                        networking_allowed: context.networkingAllowed ? 1 : 0
+                                        networking_allowed: context.networkingAllowed ? 1 : 0,
+                                        log_callback: Self.receiveLog,
+                                        log_callback_context: logCallbackContext
                                     )
                                     return body(&configuration)
                                 }
@@ -218,9 +269,14 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
 private final class NativeRuntimeEventSink: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncStream<EngineEvent>.Continuation?
+    private var logContinuation: AsyncStream<NativeRuntimeLogRecord>.Continuation?
 
-    init(continuation: AsyncStream<EngineEvent>.Continuation) {
+    init(
+        continuation: AsyncStream<EngineEvent>.Continuation,
+        logContinuation: AsyncStream<NativeRuntimeLogRecord>.Continuation
+    ) {
         self.continuation = continuation
+        self.logContinuation = logContinuation
     }
 
     func yield(_ event: EngineEvent) {
@@ -233,9 +289,19 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
     func finish() {
         lock.lock()
         let continuation = continuation
+        let logContinuation = logContinuation
         self.continuation = nil
+        self.logContinuation = nil
         lock.unlock()
         continuation?.finish()
+        logContinuation?.finish()
+    }
+
+    func yieldLog(_ record: NativeRuntimeLogRecord) {
+        lock.lock()
+        let continuation = logContinuation
+        lock.unlock()
+        continuation?.yield(record)
     }
 }
 

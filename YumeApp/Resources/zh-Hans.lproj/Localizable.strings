@@ -169,7 +169,7 @@
 "appLogs.current" = "当前";
 "appLogs.runtime.title" = "引擎运行日志";
 "appLogs.runtime.empty" = "尚未生成引擎运行日志。";
-"appLogs.runtime.description" = "这里可直接查看和分享 mkxp、AetherKiri、Ren’Py 等宿主日志。上方单个会话仅是 App 日志；提交问题时请优先使用下方的完整日志导出。";
+"appLogs.runtime.description" = "原生与 Web 引擎诊断会实时合并到上方的 App 会话时间线；这里仍保留原始引擎文件，作为进程崩溃时的兜底。";
 "appLogs.export.title" = "导出";
 "appLogs.export.prepare" = "准备完整日志导出";
 "appLogs.export.share" = "分享完整日志";

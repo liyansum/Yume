@@ -91,13 +91,20 @@ struct AetherSession {
     std::string locale_identifier;
     YumeRuntimeEventCallback callback = nullptr;
     void *callback_context = nullptr;
+    YumeRuntimeLogCallback log_callback = nullptr;
+    void *log_callback_context = nullptr;
     __strong YumeAetherRuntimeView *view = nil;
     std::atomic<bool> stopped{false};
     std::mutex log_mutex;
 };
 
 static void AppendHostLog(AetherSession *session, const std::string &message) {
-    if (session == nullptr || session->log_root.empty()) return;
+    if (session == nullptr) return;
+    if (session->log_callback != nullptr) {
+        session->log_callback(YUME_RUNTIME_LOG_INFORMATION, "aetherkiri",
+                              message.c_str(), session->log_callback_context);
+    }
+    if (session->log_root.empty()) return;
     std::lock_guard<std::mutex> guard(session->log_mutex);
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:session->log_root.c_str()];
@@ -112,11 +119,34 @@ static void AppendHostLog(AetherSession *session, const std::string &message) {
         FILE *stream = fopen(path.fileSystemRepresentation, "ab");
         if (stream == nullptr) return;
         const double timestamp = NSDate.date.timeIntervalSince1970;
-        fprintf(stream, "%.3f [thread=%s] %s\n", timestamp,
+        fprintf(stream, "%.3f [mono=%.3f thread=%s] %s\n", timestamp,
+                CACurrentMediaTime(),
                 NSThread.isMainThread ? "main" : "worker", message.c_str());
         fflush(stream);
         fsync(fileno(stream));
         fclose(stream);
+    }
+}
+
+static void AppendAetherPathSummary(AetherSession *session, const char *label,
+                                    const std::string &path) {
+    @autoreleasepool {
+        NSString *value = [NSString stringWithUTF8String:path.c_str()];
+        BOOL isDirectory = NO;
+        const BOOL exists = value.length > 0 &&
+            [[NSFileManager defaultManager] fileExistsAtPath:value
+                                                 isDirectory:&isDirectory];
+        NSArray<NSString *> *children = exists && isDirectory
+            ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:value error:nil]
+            : nil;
+        char line[512];
+        std::snprintf(line, sizeof(line),
+                      "path.%s exists=%d directory=%d readable=%d writable=%d children=%lu value=%s",
+                      label, exists ? 1 : 0, isDirectory ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isReadableFileAtPath:value] ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isWritableFileAtPath:value] ? 1 : 0,
+                      static_cast<unsigned long>(children.count), path.c_str());
+        AppendHostLog(session, line);
     }
 }
 
@@ -223,6 +253,14 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     CFTimeInterval _lastTimestamp;
     uint32_t _frameWidth;
     uint32_t _frameHeight;
+    uint32_t _lastSurfaceWidth;
+    uint32_t _lastSurfaceHeight;
+    uint32_t _lastStartupState;
+    uint64_t _startupPollCount;
+    uint64_t _tickCount;
+    uint64_t _presentedFrameCount;
+    uint64_t _inputSequence;
+    CFTimeInterval _statsStartedAt;
     BOOL _startupResolved;
     BOOL _firstFrameSent;
     BOOL _paused;
@@ -236,6 +274,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         _frameWorkPending.store(false);
         _workerStopped.store(false);
         _workerPaused.store(false);
+        _lastStartupState = static_cast<uint32_t>(-1);
+        _statsStartedAt = CACurrentMediaTime();
         self.backgroundColor = UIColor.blackColor;
         self.multipleTouchEnabled = YES;
         self.userInteractionEnabled = YES;
@@ -304,6 +344,16 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         std::max<CGFloat>(1, std::round(CGRectGetWidth(self.bounds) * scale)));
     const uint32_t height = static_cast<uint32_t>(
         std::max<CGFloat>(1, std::round(CGRectGetHeight(self.bounds) * scale)));
+    if (width != _lastSurfaceWidth || height != _lastSurfaceHeight) {
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "surface.resize points=%.1fx%.1f scale=%.2f pixels=%ux%u window=%d",
+                      self.bounds.size.width, self.bounds.size.height, scale,
+                      width, height, self.window != nil ? 1 : 0);
+        AppendHostLog(_session, line);
+        _lastSurfaceWidth = width;
+        _lastSurfaceHeight = height;
+    }
     [self runOnEngineThread:^{
         if (_engine != nullptr && !_workerStopped.load()) {
             (void)engine_set_surface_size(_engine, width, height);
@@ -333,6 +383,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (_engine != nullptr) return 0;
 
     AppendHostLog(_session, "start.enter");
+    AppendHostLog(_session, std::string("start.runtime=") +
+        (_session->kind == AetherRuntimeKind::ONScripter ? "onscripter" : "kirikiri") +
+        " renderer=debug_cpu fps=60 locale=" + _session->locale_identifier);
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.start.enter"];
     SDL_SetMainReady();
     SDL_iPhoneSetEventPump(SDL_TRUE);
@@ -377,7 +430,13 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.configured"];
     NSString *fontPath = BundledDefaultFontPath();
     if (fontPath.length > 0) {
-        (void)SetOption(_engine, "default_font", fontPath.fileSystemRepresentation);
+        const engine_result_t fontResult =
+            SetOption(_engine, "default_font", fontPath.fileSystemRepresentation);
+        AppendHostLog(_session, "start.default-font result=" +
+            std::to_string(static_cast<int>(fontResult)) + " path=" +
+            std::string(fontPath.fileSystemRepresentation ?: "<nil>"));
+    } else {
+        AppendHostLog(_session, "start.default-font missing");
     }
     if (!_session->save_root.empty()) {
         setenv("YUME_KIRIKIRI_SAVEDATA", _session->save_root.c_str(), 1);
@@ -413,8 +472,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (void)processEngineFrameAtTimestamp:(CFTimeInterval)timestamp {
     if (_engine == nullptr || _workerStopped.load() || _workerPaused.load()) return;
 
-    if (!_startupResolved) {
-        AppendHostLog(_session, "frame.startup-poll.begin");
+    _startupPollCount += 1;
+    if (!_startupResolved &&
+        (_startupPollCount == 1u || _startupPollCount % 60u == 0u)) {
         [self drainEngineLogs];
     }
 
@@ -425,6 +485,16 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         AppendEngineError(_session, _engine, "frame.startup-state.failed");
         [self failWithCode:"aether.startup-state"];
         return;
+    }
+    if (startupState != _lastStartupState) {
+        char line[128];
+        std::snprintf(line, sizeof(line),
+                      "startup.state previous=%u current=%u poll=%llu result=%d",
+                      _lastStartupState, startupState,
+                      static_cast<unsigned long long>(_startupPollCount),
+                      static_cast<int>(startupResult));
+        AppendHostLog(_session, line);
+        _lastStartupState = startupState;
     }
     if (startupState == ENGINE_STARTUP_STATE_FAILED) {
         [self drainEngineLogs];
@@ -442,9 +512,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     _lastTimestamp = timestamp;
     const uint32_t deltaMilliseconds = static_cast<uint32_t>(
         std::max(1.0, std::round(delta * 1000.0)));
-    if (_lastFrameSerial == 0) AppendHostLog(_session, "frame.first-tick.begin");
+    if (_tickCount == 0) AppendHostLog(_session, "frame.first-tick.begin");
     const engine_result_t tickResult = engine_tick(_engine, deltaMilliseconds);
-    if (_lastFrameSerial == 0) AppendHostLog(_session, "frame.first-tick.end");
+    _tickCount += 1;
+    if (_tickCount == 1) AppendHostLog(_session, "frame.first-tick.end");
     if (tickResult != ENGINE_RESULT_OK) {
         AppendEngineError(_session, _engine, "frame.tick.failed");
         [self failWithCode:"aether.tick"];
@@ -453,10 +524,23 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
     engine_frame_desc_t frame{};
     frame.struct_size = sizeof(frame);
-    if (engine_get_frame_desc(_engine, &frame) != ENGINE_RESULT_OK ||
+    const engine_result_t descriptorResult = engine_get_frame_desc(_engine, &frame);
+    if (descriptorResult != ENGINE_RESULT_OK ||
         frame.width == 0 || frame.height == 0 || frame.stride_bytes < frame.width * 4u ||
         frame.pixel_format != ENGINE_PIXEL_FORMAT_RGBA8888 ||
         frame.frame_serial == _lastFrameSerial) {
+        if (_tickCount <= 3 || _tickCount % 300u == 0u) {
+            char line[224];
+            std::snprintf(line, sizeof(line),
+                          "frame.descriptor tick=%llu result=%d serial=%llu previous=%llu size=%ux%u stride=%u format=%u",
+                          static_cast<unsigned long long>(_tickCount),
+                          static_cast<int>(descriptorResult),
+                          static_cast<unsigned long long>(frame.frame_serial),
+                          static_cast<unsigned long long>(_lastFrameSerial),
+                          frame.width, frame.height, frame.stride_bytes,
+                          static_cast<unsigned int>(frame.pixel_format));
+            AppendHostLog(_session, line);
+        }
         return;
     }
     const size_t byteCount = static_cast<size_t>(frame.stride_bytes) * frame.height;
@@ -465,9 +549,33 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         [self failWithCode:"aether.frame-memory"];
         return;
     }
-    if (engine_read_frame_rgba(_engine, pixels, byteCount) != ENGINE_RESULT_OK) {
+    const engine_result_t readResult = engine_read_frame_rgba(_engine, pixels, byteCount);
+    if (readResult != ENGINE_RESULT_OK) {
+        AppendHostLog(_session, "frame.read-failed result=" +
+            std::to_string(static_cast<int>(readResult)) + " bytes=" +
+            std::to_string(byteCount));
         free(pixels);
         return;
+    }
+    _presentedFrameCount += 1;
+    if (_presentedFrameCount == 1 || _presentedFrameCount % 120u == 0u) {
+        const auto *sample = static_cast<const uint8_t *>(pixels);
+        uint8_t minimum = 255;
+        uint8_t maximum = 0;
+        for (size_t offset = 0; offset < byteCount; offset += 64u) {
+            minimum = std::min(minimum, sample[offset]);
+            maximum = std::max(maximum, sample[offset]);
+        }
+        const double elapsed = std::max(0.001, CACurrentMediaTime() - _statsStartedAt);
+        char line[256];
+        std::snprintf(line, sizeof(line),
+                      "frame.stats count=%llu tick=%llu serial=%llu size=%ux%u stride=%u sampleMin=%u sampleMax=%u avgFps=%.2f",
+                      static_cast<unsigned long long>(_presentedFrameCount),
+                      static_cast<unsigned long long>(_tickCount),
+                      static_cast<unsigned long long>(frame.frame_serial),
+                      frame.width, frame.height, frame.stride_bytes,
+                      minimum, maximum, _presentedFrameCount / elapsed);
+        AppendHostLog(_session, line);
     }
     // DebugCpu stores scanlines with origin at the bottom. Flip so
     // UIKit shows the scene right-side up and tap mapping matches.
@@ -579,7 +687,14 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.type = pressed ? ENGINE_INPUT_EVENT_KEY_DOWN : ENGINE_INPUT_EVENT_KEY_UP;
         event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
         event.key_code = key;
-        (void)engine_send_input(_engine, &event);
+        const engine_result_t result = engine_send_input(_engine, &event);
+        char line[160];
+        std::snprintf(line, sizeof(line),
+                      "input.key sequence=%llu key=%d pressed=%d result=%d startup=%d",
+                      static_cast<unsigned long long>(++_inputSequence), key,
+                      pressed ? 1 : 0, static_cast<int>(result),
+                      _startupResolved ? 1 : 0);
+        AppendHostLog(_session, line);
     } waitUntilDone:NO];
     return 0;
 }
@@ -642,7 +757,14 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         // Aether's input ABI follows SDL button numbering: 0 is primary/left,
         // 1 is secondary/right. Touch must always synthesize the primary one.
         event.button = 0;
-        (void)engine_send_input(_engine, &event);
+        const engine_result_t result = engine_send_input(_engine, &event);
+        char line[224];
+        std::snprintf(line, sizeof(line),
+                      "input.pointer sequence=%llu source=bridge pressed=%d view=%.1f,%.1f mapped=%.1f,%.1f frame=%ux%u result=%d",
+                      static_cast<unsigned long long>(++_inputSequence),
+                      pressed ? 1 : 0, x, y, point.x, point.y,
+                      _frameWidth, _frameHeight, static_cast<int>(result));
+        AppendHostLog(_session, line);
     } waitUntilDone:NO];
     return 0;
 }
@@ -668,7 +790,17 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.pointer_id = pointerID;
         event.button = 0;
         if (cancelled) event.modifiers = ENGINE_INPUT_MODIFIER_POINTER_CANCEL;
-        (void)engine_send_input(_engine, &event);
+        const engine_result_t result = engine_send_input(_engine, &event);
+        if (type != ENGINE_INPUT_EVENT_POINTER_MOVE || result != ENGINE_RESULT_OK) {
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "input.pointer sequence=%llu source=touch type=%u id=%d view=%.1f,%.1f mapped=%.1f,%.1f frame=%ux%u cancelled=%d result=%d",
+                          static_cast<unsigned long long>(++_inputSequence), type,
+                          pointerID, viewPoint.x, viewPoint.y, point.x, point.y,
+                          _frameWidth, _frameHeight, cancelled ? 1 : 0,
+                          static_cast<int>(result));
+            AppendHostLog(_session, line);
+        }
     } waitUntilDone:NO];
 }
 
@@ -688,6 +820,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 - (int32_t)stopEngine {
     if (_stopped) return 0;
     _stopped = YES;
+    AppendHostLog(_session, "stop.requested ticks=" + std::to_string(_tickCount) +
+        " frames=" + std::to_string(_presentedFrameCount) +
+        " inputs=" + std::to_string(_inputSequence));
     [_displayLink invalidate];
     _displayLink = nil;
     self.layer.contents = nil;
@@ -737,7 +872,13 @@ static int32_t CreateSession(AetherRuntimeKind kind,
         ? configuration->locale_identifier : "";
     session->callback = callback;
     session->callback_context = callbackContext;
+    session->log_callback = configuration->log_callback;
+    session->log_callback_context = configuration->log_callback_context;
     AppendHostLog(session, "session.created");
+    AppendAetherPathSummary(session, "content", session->content_root);
+    AppendAetherPathSummary(session, "save", session->save_root);
+    AppendAetherPathSummary(session, "derived", session->derived_root);
+    AppendAetherPathSummary(session, "logs", session->log_root);
     InstallAetherCrashBreadcrumb(session);
     OnMainSync(^NSInteger {
         session->view = [[YumeAetherRuntimeView alloc] initWithSession:session];

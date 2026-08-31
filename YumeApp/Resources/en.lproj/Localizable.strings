@@ -169,7 +169,7 @@
 "appLogs.current" = "Current";
 "appLogs.runtime.title" = "Engine runtime logs";
 "appLogs.runtime.empty" = "No engine runtime logs have been generated yet.";
-"appLogs.runtime.description" = "Share mkxp, AetherKiri and Ren’Py host logs directly here. A session above contains App events only; use the complete export below when reporting a problem.";
+"appLogs.runtime.description" = "Native and web-engine diagnostics are mirrored into the App session timeline above. Raw engine files remain available here as a crash-safe fallback.";
 "appLogs.export.title" = "Export";
 "appLogs.export.prepare" = "Prepare Complete Log Export";
 "appLogs.export.share" = "Share Complete Logs";

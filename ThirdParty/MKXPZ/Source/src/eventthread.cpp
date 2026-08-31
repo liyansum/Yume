@@ -40,6 +40,7 @@ extern "C" bool mkxp_getTouchMouseEnabled(void);
 #include <alc.h>
 #include <alext.h>
 #include <cmath>
+#include <cstdio>
 
 #include "sharedstate.h"
 #include "graphics.h"
@@ -215,6 +216,17 @@ void EventThread::process(RGSSThreadData &rtData)
     SDL_DisplayMode dm = {0};
     
     SDL_GetWindowSize(win, &winW, &winH);
+
+#if TARGET_OS_IPHONE
+    uint64_t yumeEventCount = 0;
+    Uint32 yumeLastEventType = 0;
+    Uint32 yumeNextHeartbeat = SDL_GetTicks() + 2000;
+    std::snprintf(buffer, sizeof(buffer),
+                  "event-loop.enter mainThread=%d windowID=%u size=%dx%d sdlInit=%u video=%s",
+                  pthread_main_np() ? 1 : 0, SDL_GetWindowID(win), winW, winH,
+                  SDL_WasInit(0), SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "<none>");
+    mkxp_debugLog("INFO", "eventthread", buffer);
+#endif
     
     // Just in case it's started when the window is opened
     // for some dumb reason
@@ -229,6 +241,18 @@ void EventThread::process(RGSSThreadData &rtData)
     while (true)
     {
 #if TARGET_OS_IPHONE
+        const Uint32 yumeNow = SDL_GetTicks();
+        if (SDL_TICKS_PASSED(yumeNow, yumeNextHeartbeat)) {
+            SDL_GetWindowSize(win, &winW, &winH);
+            std::snprintf(buffer, sizeof(buffer),
+                          "event-loop.heartbeat events=%llu lastType=%u window=%dx%d focused=%d terminate=%d textInput=%d error=%s",
+                          static_cast<unsigned long long>(yumeEventCount),
+                          yumeLastEventType, winW, winH, windowFocused ? 1 : 0,
+                          terminate ? 1 : 0, SDL_IsTextInputActive() ? 1 : 0,
+                          SDL_GetError());
+            mkxp_debugLog("INFO", "eventthread", buffer);
+            yumeNextHeartbeat = yumeNow + 2000;
+        }
         /* Yume hosts mkxp's SDL_main on UIKit's main thread. Merely using a
          * timed SDL wait does not service blocks queued to the main dispatch
          * queue (ANGLE uses those while creating its native layer), which can
@@ -243,6 +267,8 @@ void EventThread::process(RGSSThreadData &rtData)
             Debug() << "EventThread: Event error";
             break;
         }
+        yumeEventCount += 1;
+        yumeLastEventType = event.type;
 #else
         if (!SDL_WaitEvent(&event))
         {

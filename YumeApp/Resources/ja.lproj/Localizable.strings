@@ -169,7 +169,7 @@
 "appLogs.current" = "現在";
 "appLogs.runtime.title" = "エンジン実行ログ";
 "appLogs.runtime.empty" = "エンジン実行ログはまだありません。";
-"appLogs.runtime.description" = "mkxp、AetherKiri、Ren’Py などのホストログを直接共有できます。上の単一セッションは App ログのみです。不具合報告には下の完全ログ書き出しを使用してください。";
+"appLogs.runtime.description" = "ネイティブおよび Web エンジンの診断は、上の App セッション時系列へリアルタイムに統合されます。クラッシュ時の予備として生ログもここに残ります。";
 "appLogs.export.title" = "エクスポート";
 "appLogs.export.prepare" = "完全なログを書き出す";
 "appLogs.export.share" = "完全なログを共有";

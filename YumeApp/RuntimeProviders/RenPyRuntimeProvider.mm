@@ -15,6 +15,7 @@
 #include <new>
 #include <signal.h>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <SDL.h>
@@ -44,6 +45,8 @@ struct RenPySession {
     RenPyGeneration generation = RenPyGeneration::Modern;
     YumeRuntimeEventCallback callback = nullptr;
     void *callbackContext = nullptr;
+    YumeRuntimeLogCallback logCallback = nullptr;
+    void *logCallbackContext = nullptr;
     std::mutex callbackMutex;
     std::mutex logMutex;
     __strong YumeRenPyHostView *view = nil;
@@ -52,10 +55,22 @@ struct RenPySession {
     std::atomic<bool> mainReturned{false};
     std::atomic<bool> destroyRequested{false};
     std::atomic<bool> stoppedEventSent{false};
+    std::atomic<uint64_t> inputSequence{0};
+    std::mutex pythonLogMutex;
+    uint64_t pythonLogOffset = 0;
 };
 
 static void AppendRenPyHostLog(RenPySession *session, const char *message) {
-    if (session == nullptr || session->logRoot.empty()) return;
+    if (session == nullptr) return;
+    {
+        std::lock_guard<std::mutex> callbackLock(session->callbackMutex);
+        if (session->logCallback != nullptr) {
+            session->logCallback(YUME_RUNTIME_LOG_INFORMATION, "renpy.host",
+                                 message != nullptr ? message : "",
+                                 session->logCallbackContext);
+        }
+    }
+    if (session->logRoot.empty()) return;
     std::lock_guard<std::mutex> lock(session->logMutex);
     @autoreleasepool {
         NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
@@ -70,13 +85,66 @@ static void AppendRenPyHostLog(RenPySession *session, const char *message) {
         NSString *detail = message != nullptr
             ? ([NSString stringWithUTF8String:message] ?: @"<invalid utf8>")
             : @"";
-        NSString *line = [NSString stringWithFormat:@"%.3f %@\n",
-                          NSDate.date.timeIntervalSince1970, detail];
+        NSString *line = [NSString stringWithFormat:@"%.3f [mono=%.3f thread=%@] %@\n",
+                          NSDate.date.timeIntervalSince1970, CACurrentMediaTime(),
+                          NSThread.isMainThread ? @"main" : @"worker", detail];
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
         if (data != nil) fwrite(data.bytes, 1, data.length, file);
         fflush(file);
         fsync(fileno(file));
         fclose(file);
+    }
+}
+
+static void AppendRenPyPathSummary(RenPySession *session, const char *label,
+                                   const std::string &path) {
+    @autoreleasepool {
+        NSString *value = [NSString stringWithUTF8String:path.c_str()];
+        BOOL isDirectory = NO;
+        const BOOL exists = value.length > 0 &&
+            [[NSFileManager defaultManager] fileExistsAtPath:value
+                                                 isDirectory:&isDirectory];
+        NSArray<NSString *> *children = exists && isDirectory
+            ? [[NSFileManager defaultManager] contentsOfDirectoryAtPath:value error:nil]
+            : nil;
+        char line[512];
+        std::snprintf(line, sizeof(line),
+                      "path.%s exists=%d directory=%d readable=%d writable=%d children=%lu value=%s",
+                      label, exists ? 1 : 0, isDirectory ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isReadableFileAtPath:value] ? 1 : 0,
+                      value != nil && [[NSFileManager defaultManager] isWritableFileAtPath:value] ? 1 : 0,
+                      static_cast<unsigned long>(children.count), path.c_str());
+        AppendRenPyHostLog(session, line);
+    }
+}
+
+static void MirrorRenPyPythonLog(RenPySession *session) {
+    if (session == nullptr || session->logRoot.empty()) return;
+    std::lock_guard<std::mutex> lock(session->pythonLogMutex);
+    @autoreleasepool {
+        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
+        NSString *path = [root stringByAppendingPathComponent:@"renpy-python.log"];
+        NSFileHandle *handle = [NSFileHandle fileHandleForReadingAtPath:path];
+        if (handle == nil) return;
+        [handle seekToFileOffset:session->pythonLogOffset];
+        NSData *data = [handle readDataToEndOfFile];
+        session->pythonLogOffset += data.length;
+        [handle closeFile];
+        if (data.length == 0) return;
+        NSString *text = [[NSString alloc] initWithData:data
+                                               encoding:NSUTF8StringEncoding];
+        if (text == nil) text = [[NSString alloc] initWithData:data
+                                                     encoding:NSISOLatin1StringEncoding];
+        for (NSString *line in [text componentsSeparatedByCharactersInSet:
+                NSCharacterSet.newlineCharacterSet]) {
+            if (line.length == 0) continue;
+            std::lock_guard<std::mutex> callbackLock(session->callbackMutex);
+            if (session->logCallback != nullptr) {
+                session->logCallback(YUME_RUNTIME_LOG_INFORMATION, "renpy.python",
+                                     line.UTF8String ?: "<invalid utf8>",
+                                     session->logCallbackContext);
+            }
+        }
     }
 }
 
@@ -144,6 +212,9 @@ static void RedirectRenPyOutput(RenPySession *session) {
         NSString *path = [root stringByAppendingPathComponent:@"renpy-python.log"];
         FILE *stream = fopen(path.fileSystemRepresentation, "ab");
         if (stream == nullptr) return;
+        struct stat status {};
+        if (fstat(fileno(stream), &status) == 0)
+            session->pythonLogOffset = static_cast<uint64_t>(status.st_size);
         const int fd = fileno(stream);
         (void)dup2(fd, STDOUT_FILENO);
         (void)dup2(fd, STDERR_FILENO);
@@ -160,14 +231,10 @@ static void ReleaseRenPyClaim(void) {
 static void RenPyEmit(RenPySession *session, YumeRuntimeEventKind kind,
                       const char *code) {
     if (session == nullptr) return;
-    YumeRuntimeEventCallback callback = nullptr;
-    void *context = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(session->callbackMutex);
-        callback = session->callback;
-        context = session->callbackContext;
+    std::lock_guard<std::mutex> lock(session->callbackMutex);
+    if (session->callback != nullptr) {
+        session->callback(kind, code, session->callbackContext);
     }
-    if (callback != nullptr) callback(kind, code, context);
 }
 
 static RenPyGeneration DetectRenPyGeneration(NSString *root) {
@@ -315,6 +382,8 @@ static UIWindow *FindSDLUIKitWindow(void) {
     __weak UIView *_embeddedGameView;
     __weak UIWindow *_sdlWindow;
     BOOL _sdlStarted;
+    uint64_t _embeddingPollCount;
+    CFTimeInterval _lastEmbeddingDiagnostic;
 }
 
 - (instancetype)initWithSession:(RenPySession *)session {
@@ -340,11 +409,19 @@ static UIWindow *FindSDLUIKitWindow(void) {
     gYumeHostView = self;
     [self.window makeKeyAndVisible];
     AppendRenPyHostLog(_session, "view.in-window");
-    AppendRenPyHostLog(_session, "view.host-bound");
+    char viewLine[256];
+    std::snprintf(viewLine, sizeof(viewLine),
+                  "view.host-bound bounds=%.1fx%.1f scale=%.2f window=%p scenes=%lu",
+                  self.bounds.size.width, self.bounds.size.height,
+                  self.window.screen.scale, (__bridge void *)self.window,
+                  static_cast<unsigned long>(UIApplication.sharedApplication.connectedScenes.count));
+    AppendRenPyHostLog(_session, viewLine);
     RenPySession *session = _session;
     std::string executable = session->launcherPath;
     dispatch_async(dispatch_get_main_queue(), ^{
-        AppendRenPyHostLog(session, "engine.sdl-main.begin");
+        AppendRenPyHostLog(session, ("engine.sdl-main.begin wasInit=" +
+            std::to_string(SDL_WasInit(0)) + " videoDriver=" +
+            std::string(SDL_GetCurrentVideoDriver() ?: "<none>")).c_str());
         // Never chdir into the imported game. Windows/mac exports ship
         // lib/python2.7/iosupport.py that uses pyobjus against macOS
         // Foundation paths and abort on iOS.
@@ -386,11 +463,17 @@ static UIWindow *FindSDLUIKitWindow(void) {
         // host UIApplication, so reproduce that part without starting a
         // second UIApplicationMain.
         SDL_iPhoneSetEventPump(SDL_TRUE);
+        const CFTimeInterval startedAt = CACurrentMediaTime();
         int result = session->generation == RenPyGeneration::Modern
             ? yume_renpy_modern_main(3, arguments)
             : yume_renpy_legacy_main(3, arguments);
         SDL_iPhoneSetEventPump(SDL_FALSE);
-        std::string resultLine = "engine.main-returned result=" + std::to_string(result);
+        MirrorRenPyPythonLog(session);
+        std::string resultLine = "engine.main-returned result=" + std::to_string(result) +
+            " elapsed=" + std::to_string(CACurrentMediaTime() - startedAt) +
+            " wasInit=" + std::to_string(SDL_WasInit(0)) + " videoDriver=" +
+            std::string(SDL_GetCurrentVideoDriver() ?: "<none>") + " sdlError=" +
+            std::string(SDL_GetError() ?: "<none>");
         AppendRenPyHostLog(session, resultLine.c_str());
         session->mainReturned.store(true);
         session->running.store(false);
@@ -408,12 +491,31 @@ static UIWindow *FindSDLUIKitWindow(void) {
 
 - (void)beginEmbedding {
     if (_embeddingLink != nil) return;
+    AppendRenPyHostLog(_session, "view.embedding-watch.begin");
     _embeddingLink = [CADisplayLink displayLinkWithTarget:self
                                                  selector:@selector(pollForSDLView:)];
     [_embeddingLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 }
 
 - (void)pollForSDLView:(CADisplayLink *)link {
+    _embeddingPollCount += 1;
+    if (_embeddingPollCount == 1 ||
+        CACurrentMediaTime() - _lastEmbeddingDiagnostic >= 2.0) {
+        _lastEmbeddingDiagnostic = CACurrentMediaTime();
+        MirrorRenPyPythonLog(_session);
+        SDL_Window *keyboard = SDL_GetKeyboardFocus();
+        SDL_Window *mouse = SDL_GetMouseFocus();
+        char line[320];
+        std::snprintf(line, sizeof(line),
+                      "view.embedding-poll count=%llu embedded=%d sdlInit=%u video=%s keyboardWindow=%u mouseWindow=%u sdlError=%s",
+                      static_cast<unsigned long long>(_embeddingPollCount),
+                      _embeddedGameView != nil ? 1 : 0, SDL_WasInit(0),
+                      SDL_GetCurrentVideoDriver() ?: "<none>",
+                      keyboard != nullptr ? SDL_GetWindowID(keyboard) : 0,
+                      mouse != nullptr ? SDL_GetWindowID(mouse) : 0,
+                      SDL_GetError() ?: "<none>");
+        AppendRenPyHostLog(_session, line);
+    }
     if (_embeddedGameView != nil) {
         _embeddedGameView.frame = self.bounds;
         return;
@@ -495,11 +597,16 @@ static int32_t RenPyCreate(const YumeRuntimeConfiguration *configuration,
     session->logRoot = configuration->log_root != nullptr ? configuration->log_root : "";
     session->callback = callback;
     session->callbackContext = context;
+    session->logCallback = configuration->log_callback;
+    session->logCallbackContext = configuration->log_callback_context;
     NSString *root = [NSString stringWithUTF8String:session->contentRoot.c_str()];
     session->generation = DetectRenPyGeneration(root);
     AppendRenPyHostLog(session, session->generation == RenPyGeneration::Modern
         ? "session.created generation=modern"
         : "session.created generation=legacy");
+    AppendRenPyPathSummary(session, "content", session->contentRoot);
+    AppendRenPyPathSummary(session, "save", session->saveRoot);
+    AppendRenPyPathSummary(session, "logs", session->logRoot);
     session->view = [[YumeRenPyHostView alloc] initWithSession:session];
     if (session->view == nil) {
         delete session;
@@ -525,6 +632,14 @@ static int32_t RenPyStart(void *opaque) {
     NSString *siteModule = session->generation == RenPyGeneration::Modern
         ? [base stringByAppendingPathComponent:@"lib/python3.12/site.pyc"]
         : [base stringByAppendingPathComponent:@"lib/python2.7/site.pyo"];
+    AppendRenPyPathSummary(session, "runtime", generationRoot.UTF8String ?: "");
+    NSDictionary *mainAttributes = [fileManager attributesOfItemAtPath:mainScript error:nil];
+    NSDictionary *siteAttributes = [fileManager attributesOfItemAtPath:siteModule error:nil];
+    AppendRenPyHostLog(session, ("start.preflight mainBytes=" +
+        std::to_string([mainAttributes[NSFileSize] unsignedLongLongValue]) +
+        " siteBytes=" +
+        std::to_string([siteAttributes[NSFileSize] unsignedLongLongValue]) +
+        " bundle=" + std::string(NSBundle.mainBundle.bundlePath.UTF8String ?: "<nil>")).c_str());
     if (![fileManager fileExistsAtPath:mainScript] ||
         ![fileManager fileExistsAtPath:siteModule]) {
         session->running.store(false);
@@ -564,6 +679,11 @@ static int32_t RenPyStart(void *opaque) {
     AppendRenPyHostLog(session, "start.renderer=sw safe-mode=1");
     AppendRenPyHostLog(session, ("start.main=" + std::string(mainScript.UTF8String ?: "")).c_str());
     AppendRenPyHostLog(session, ("start.site=" + std::string(siteModule.UTF8String ?: "")).c_str());
+    AppendRenPyHostLog(session, ("start.environment PYTHONHOME=" +
+        std::string(getenv("PYTHONHOME") ?: "") + " RENPY_SEARCHPATH=" +
+        std::string(getenv("RENPY_SEARCHPATH") ?: "") + " RENPY_LOGDIR=" +
+        std::string(getenv("RENPY_LOGDIR") ?: "") + " saves=" +
+        std::string(getenv("RENPY_PATH_TO_SAVES") ?: "")).c_str());
     InstallRenPyCrashBreadcrumb(session);
     RedirectRenPyOutput(session);
     AppendRenPyHostLog(session, "start.environment-configured");
@@ -649,7 +769,14 @@ static int32_t RenPySendButton(void *opaque, YumeRuntimeInputAction action,
     event.key.state = pressed ? 1 : 0;
     event.key.keysym.scancode = scancode;
     event.key.keysym.sym = RenPyKeycode(action);
-    return SDL_PushEvent(&event) >= 0 ? 0 : -2;
+    const int result = SDL_PushEvent(&event);
+    AppendRenPyHostLog(session, ("input.key sequence=" +
+        std::to_string(session->inputSequence.fetch_add(1) + 1) + " action=" +
+        std::to_string(static_cast<int>(action)) + " scancode=" +
+        std::to_string(static_cast<int>(scancode)) + " pressed=" +
+        std::to_string(pressed != 0) + " pushResult=" + std::to_string(result) +
+        " sdlError=" + std::string(SDL_GetError() ?: "<none>")).c_str());
+    return result >= 0 ? 0 : -2;
 }
 
 static int32_t RenPySendPointer(void *opaque, double x, double y, int32_t pressed) {
@@ -659,14 +786,22 @@ static int32_t RenPySendPointer(void *opaque, double x, double y, int32_t presse
     motion.motion.type = SDL_MOUSEMOTION;
     motion.motion.x = static_cast<int32_t>(x);
     motion.motion.y = static_cast<int32_t>(y);
-    (void)SDL_PushEvent(&motion);
+    const int motionResult = SDL_PushEvent(&motion);
     SDL_Event button{};
     button.button.type = pressed ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
     button.button.button = 1;
     button.button.state = pressed ? 1 : 0;
     button.button.x = static_cast<int32_t>(x);
     button.button.y = static_cast<int32_t>(y);
-    return SDL_PushEvent(&button) >= 0 ? 0 : -2;
+    const int buttonResult = SDL_PushEvent(&button);
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "input.pointer sequence=%llu x=%.1f y=%.1f pressed=%d motionResult=%d buttonResult=%d sdlError=%s",
+                  static_cast<unsigned long long>(session->inputSequence.fetch_add(1) + 1),
+                  x, y, pressed != 0 ? 1 : 0, motionResult, buttonResult,
+                  SDL_GetError() ?: "<none>");
+    AppendRenPyHostLog(session, line);
+    return buttonResult >= 0 ? 0 : -2;
 }
 
 static int32_t RenPySendText(void *opaque, const char *text) {
@@ -675,12 +810,19 @@ static int32_t RenPySendText(void *opaque, const char *text) {
     SDL_Event event{};
     event.text.type = SDL_TEXTINPUT;
     std::strncpy(event.text.text, text, sizeof(event.text.text) - 1);
-    return SDL_PushEvent(&event) >= 0 ? 0 : -2;
+    const int result = SDL_PushEvent(&event);
+    AppendRenPyHostLog(session, ("input.text sequence=" +
+        std::to_string(session->inputSequence.fetch_add(1) + 1) + " bytes=" +
+        std::to_string(std::strlen(text)) + " pushResult=" +
+        std::to_string(result)).c_str());
+    return result >= 0 ? 0 : -2;
 }
 static int32_t RenPyStop(void *opaque) {
     auto *session = static_cast<RenPySession *>(opaque);
     if (session != nullptr && session->running.load()) {
-        AppendRenPyHostLog(session, "lifecycle.stop-requested");
+        AppendRenPyHostLog(session, ("lifecycle.stop-requested inputs=" +
+            std::to_string(session->inputSequence.load()) + " mainReturned=" +
+            std::to_string(session->mainReturned.load())).c_str());
         PushSimpleEvent(SDL_QUIT);
     }
     return 0;
@@ -692,10 +834,13 @@ static void *RenPyNativeView(void *opaque) {
 static void RenPyDestroy(void *opaque) {
     auto *session = static_cast<RenPySession *>(opaque);
     if (session == nullptr) return;
+    AppendRenPyHostLog(session, "lifecycle.destroy-requested");
     {
         std::lock_guard<std::mutex> lock(session->callbackMutex);
         session->callback = nullptr;
         session->callbackContext = nullptr;
+        session->logCallback = nullptr;
+        session->logCallbackContext = nullptr;
     }
     session->destroyRequested.store(true);
     (void)RenPyStop(session);

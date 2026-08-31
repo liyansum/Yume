@@ -33,6 +33,8 @@ static std::atomic<bool> s_gameReady{false};
 static std::mutex s_debugLogMutex;
 static std::string s_debugLogPath;
 static FILE *s_debugLogFile = nullptr;
+static mkxp_DebugLogCallback s_debugLogCallback = nullptr;
+static void *s_debugLogCallbackUserdata = nullptr;
 
 // Game path selection: Library sets the path, engine waits for it.
 static std::mutex s_pathMutex;
@@ -1165,6 +1167,12 @@ void mkxp_setDebugLogPath(const char *path) {
     }
 }
 
+void mkxp_setDebugLogCallback(mkxp_DebugLogCallback callback, void *userdata) {
+    std::lock_guard<std::mutex> lock(s_debugLogMutex);
+    s_debugLogCallback = callback;
+    s_debugLogCallbackUserdata = userdata;
+}
+
 // Fast path so hot-path callers (resize handler, frame boundary)
 // skip formatting when logging is off.
 int mkxp_debugLogEnabled(void) {
@@ -1175,14 +1183,23 @@ int mkxp_debugLogEnabled(void) {
 }
 
 void mkxp_debugLog(const char *tag, const char *source, const char *message) {
-    std::lock_guard<std::mutex> lock(s_debugLogMutex);
-    if (!s_debugLogFile) return;
-    fprintf(s_debugLogFile, "[%s] (%s) %s\n", tag, source, message);
-    // Flush immediately: without it, RGSS thread writes sit in
-    // stdio's per-FILE buffer until the next session's
-    // setDebugLogPath closes the file, hiding diagnostics from any
-    // mid-session inspection.
-    fflush(s_debugLogFile);
+    mkxp_DebugLogCallback callback = nullptr;
+    void *userdata = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_debugLogMutex);
+        if (s_debugLogFile) {
+            fprintf(s_debugLogFile, "[%s] (%s) %s\n", tag, source, message);
+            // Flush immediately: without it, RGSS thread writes sit in
+            // stdio's per-FILE buffer until the next session's
+            // setDebugLogPath closes the file, hiding diagnostics from any
+            // mid-session inspection.
+            fflush(s_debugLogFile);
+        }
+        callback = s_debugLogCallback;
+        userdata = s_debugLogCallbackUserdata;
+    }
+    if (callback)
+        callback(tag ? tag : "", source ? source : "", message ? message : "", userdata);
 }
 
 } // extern "C"
