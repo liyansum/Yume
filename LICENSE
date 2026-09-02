@@ -2,24 +2,26 @@ Yume — local multi-engine game compatibility runner
 Copyright (C) 2026 the Yume authors
 
 This program is free software; you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation; either version 3 of the License, or (at your option) any later
-version.
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation; either version 3 of the License, or (at your option) any
+later version.
 
-Combination notice: Yume statically links AetherKiri (GPL-3.0-or-later) and
-other compatible free-software runtimes. Distributed combined binaries are
-provided under the GNU General Public License version 3 or later. The complete
-corresponding source code, including local integration changes and build
-scripts, accompanies every distribution.
+Combination notice: Yume statically links art3m1s-core (AGPL-3.0), AetherKiri
+(GPL-3.0-or-later), and other compatible free-software runtimes. Distributed
+combined binaries are provided under the GNU Affero General Public License
+version 3 or later. The complete corresponding source code, including local
+integration changes and reproducible build scripts, accompanies every
+distribution.
 
 This program is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
 PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License along with
-this program; a complete copy is included at
-ThirdParty/AetherKiri/Source/LICENSE. If not, see
-https://www.gnu.org/licenses/gpl-3.0.html.
+You should have received a copy of the GNU Affero General Public License along
+with this program. The pinned art3m1s source and its license are obtained by
+Scripts/build_art3m1s_runtime.sh from the source and commit recorded in
+ThirdParty/RuntimeDependencies.lock.json. If not, see
+https://www.gnu.org/licenses/agpl-3.0.html.
 
-Third-party components retain their own licenses; see the in-app open-source
-licenses page and NOTICE.md for the complete list.
+Third-party components retain their own licenses; see the dependency lock and
+the in-app open-source licenses page for the complete list.

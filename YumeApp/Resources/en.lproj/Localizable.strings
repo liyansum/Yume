@@ -132,7 +132,7 @@
 "diagnostics.recovery.issues" = "Recovery issues";
 "diagnostics.offline.message" = "Diagnostics remain on this device. Yume does not upload logs, crashes, or usage data.";
 "licenses.app.title" = "Yume";
-"licenses.app.message" = "Yume application code is proprietary. No third-party runtime component is included in this build.";
+"licenses.app.message" = "Yume is open source under AGPL-3.0-or-later. This build statically integrates pinned free-software compatibility runtimes; their source revisions are recorded in RuntimeDependencies.lock.json.";
 "licenses.thirdparty.title" = "Third-party components";
 "licenses.system.title" = "Apple System Frameworks";
 "licenses.system.message" = "This build uses SwiftUI, Foundation, WebKit, and Uniform Type Identifiers provided by the operating system.";

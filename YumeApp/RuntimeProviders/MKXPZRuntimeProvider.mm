@@ -347,6 +347,10 @@ static void ConfigureMKXP(MKXPSession *session) {
     AppendMKXPHostLog(session, "configure.apply-session-config.begin");
     mkxp_applySessionConfig(&config);
     AppendMKXPHostLog(session, "configure.apply-session-config.end");
+    // The iOS host presents mkxp's Metal/CPU output inside its own view.
+    // Touches therefore arrive as SDL_TOUCH_MOUSEID events and must not be
+    // discarded by the upstream desktop-oriented default.
+    mkxp_setTouchMouseEnabled(true);
     mkxp_setLauncherIdentity("yume");
     NSString *overlay = ConfigOverlayJSON(session->rtpRoots, session->rgss);
     AppendMKXPHostLog(session, overlay.UTF8String ?: "configure.overlay=<nil>");
@@ -357,6 +361,36 @@ static void ConfigureMKXP(MKXPSession *session) {
         mkxp_setDebugLogPath(logPath.fileSystemRepresentation);
     }
     mkxp_setDebugLogCallback(MKXPDebugLogMirror, session);
+}
+
+static int32_t MKXPPushPointer(MKXPSession *session, double x, double y,
+                               int32_t pressed, bool motionOnly) {
+    if (session == nullptr || !session->running.load()) return -1;
+    SDL_Event motion{};
+    motion.type = SDL_MOUSEMOTION;
+    motion.motion.which = SDL_TOUCH_MOUSEID;
+    motion.motion.x = static_cast<int32_t>(std::lround(x));
+    motion.motion.y = static_cast<int32_t>(std::lround(y));
+    const int motionResult = SDL_PushEvent(&motion);
+    if (motionOnly) return motionResult >= 0 ? 0 : -2;
+
+    SDL_Event button{};
+    button.type = pressed != 0 ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    button.button.which = SDL_TOUCH_MOUSEID;
+    button.button.button = SDL_BUTTON_LEFT;
+    button.button.state = pressed != 0 ? SDL_PRESSED : SDL_RELEASED;
+    button.button.clicks = 1;
+    button.button.x = motion.motion.x;
+    button.button.y = motion.motion.y;
+    const int buttonResult = SDL_PushEvent(&button);
+    const uint64_t sequence = session->inputSequence.fetch_add(1) + 1;
+    char line[224];
+    std::snprintf(line, sizeof(line),
+                  "input.pointer sequence=%llu x=%.1f y=%.1f pressed=%d motionResult=%d buttonResult=%d",
+                  static_cast<unsigned long long>(sequence), x, y,
+                  pressed != 0 ? 1 : 0, motionResult, buttonResult);
+    AppendMKXPHostLog(session, line);
+    return motionResult >= 0 && buttonResult >= 0 ? 0 : -2;
 }
 
 static void MKXPPresentCPUFrame(const unsigned char *rgba, int width, int height,
@@ -427,6 +461,8 @@ static void MKXPInfo(const char *message, void *context) {
         _cpuFramePending.store(false);
         self.backgroundColor = UIColor.blackColor;
         self.clipsToBounds = YES;
+        self.multipleTouchEnabled = NO;
+        self.userInteractionEnabled = YES;
         _angleLayer = [CAMetalLayer layer];
         _angleLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         _angleLayer.framebufferOnly = NO;
@@ -623,6 +659,31 @@ static void MKXPInfo(const char *message, void *context) {
     [self startEngineIfAttached];
 }
 
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    if (touch == nil) return;
+    const CGPoint point = [touch locationInView:self];
+    (void)MKXPPushPointer(_session, point.x, point.y, 1, false);
+}
+
+- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    if (touch == nil) return;
+    const CGPoint point = [touch locationInView:self];
+    (void)MKXPPushPointer(_session, point.x, point.y, 1, true);
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    UITouch *touch = touches.anyObject;
+    if (touch == nil) return;
+    const CGPoint point = [touch locationInView:self];
+    (void)MKXPPushPointer(_session, point.x, point.y, 0, false);
+}
+
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [self touchesEnded:touches withEvent:event];
+}
+
 - (void)detachSession {
     mkxp_setDebugLogCallback(nullptr, nullptr);
     mkxp_setCPUFrameCallback(nullptr, nullptr);
@@ -772,16 +833,7 @@ static int32_t MKXPSendButton(void *opaque, YumeRuntimeInputAction action,
 }
 static int32_t MKXPSendPointer(void *opaque, double x, double y, int32_t pressed) {
     auto *session = static_cast<MKXPSession *>(opaque);
-    if (session != nullptr) {
-        const uint64_t sequence = session->inputSequence.fetch_add(1) + 1;
-        char line[192];
-        std::snprintf(line, sizeof(line),
-                      "input.pointer sequence=%llu ignored=1 x=%.1f y=%.1f pressed=%d",
-                      static_cast<unsigned long long>(sequence), x, y,
-                      pressed != 0 ? 1 : 0);
-        AppendMKXPHostLog(session, line);
-    }
-    return 0;
+    return MKXPPushPointer(session, x, y, pressed, false);
 }
 static int32_t MKXPSendText(void *opaque, const char *text) {
     auto *session = static_cast<MKXPSession *>(opaque);

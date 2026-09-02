@@ -15,6 +15,7 @@ extern const YumeRuntimeProviderAPI *yume_mkxp_runtime_provider(void) YUME_WEAK_
 extern const YumeRuntimeProviderAPI *yume_aetherkiri_onscripter_runtime_provider(void) YUME_WEAK_IMPORT;
 extern const YumeRuntimeProviderAPI *yume_aetherkiri_kirikiri_runtime_provider(void) YUME_WEAK_IMPORT;
 extern const YumeRuntimeProviderAPI *yume_renios_runtime_provider(void) YUME_WEAK_IMPORT;
+extern const YumeRuntimeProviderAPI *yume_art3m1s_runtime_provider(void) YUME_WEAK_IMPORT;
 
 struct YumeRuntimeSession {
     const YumeRuntimeProviderAPI *api;
@@ -34,6 +35,8 @@ static const YumeRuntimeProviderAPI *provider_for_identifier(const char *identif
         return yume_aetherkiri_kirikiri_runtime_provider();
     if (strcmp(identifier, "renios") == 0 && yume_renios_runtime_provider)
         return yume_renios_runtime_provider();
+    if (strcmp(identifier, "art3m1s") == 0 && yume_art3m1s_runtime_provider)
+        return yume_art3m1s_runtime_provider();
     return NULL;
 }
 

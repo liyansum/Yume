@@ -10,6 +10,7 @@ public enum BuiltInGameDetectors {
             SignatureGameDetector.rpgMakerMZ,
             SignatureGameDetector.rpgMakerMV,
             SignatureGameDetector.onscripter,
+            SignatureGameDetector.artemis,
             SignatureGameDetector.kirikiri,
             SignatureGameDetector.flash,
             SignatureGameDetector.tyranoScript
@@ -44,6 +45,7 @@ public struct SignatureGameDetector: GameDetector, Sendable {
     }
 
     public let descriptor: EngineDescriptor
+    public let requiredAll: [Rule]
     public let requiredAny: [Rule]
     public let supporting: [Rule]
     public let blockingExtensions: Set<String>
@@ -52,6 +54,7 @@ public struct SignatureGameDetector: GameDetector, Sendable {
 
     public init(
         descriptor: EngineDescriptor,
+        requiredAll: [Rule] = [],
         requiredAny: [Rule],
         supporting: [Rule],
         blockingExtensions: Set<String> = [],
@@ -59,6 +62,7 @@ public struct SignatureGameDetector: GameDetector, Sendable {
         runtimeAvailable: Bool = false
     ) {
         self.descriptor = descriptor
+        self.requiredAll = requiredAll
         self.requiredAny = requiredAny
         self.supporting = supporting
         self.blockingExtensions = blockingExtensions
@@ -67,6 +71,10 @@ public struct SignatureGameDetector: GameDetector, Sendable {
     }
 
     public func probe(_ snapshot: DetectionSnapshot) -> ProbeResult? {
+        let allEvidence: [DetectionEvidence] = requiredAll.compactMap {
+            makeEvidence(for: $0, in: snapshot)
+        }
+        guard allEvidence.count == requiredAll.count else { return nil }
         let requiredEvidence: [DetectionEvidence] = requiredAny.compactMap {
             makeEvidence(for: $0, in: snapshot)
         }
@@ -75,7 +83,7 @@ public struct SignatureGameDetector: GameDetector, Sendable {
         let supportingEvidence: [DetectionEvidence] = supporting.compactMap {
             makeEvidence(for: $0, in: snapshot)
         }
-        var collectedEvidence = requiredEvidence + supportingEvidence
+        var collectedEvidence = allEvidence + requiredEvidence + supportingEvidence
         var issues: [CompatibilityIssue] = []
 
         if !runtimeAvailable {
@@ -247,6 +255,32 @@ public extension SignatureGameDetector {
             Rule(.fileExtension("sar"), kind: .characteristicFile, detailCode: "ons.archive.sar", score: 20)
         ],
         blockingExtensions: ["nt2", "nt3"],
+        runtimeAvailable: true
+    )
+
+    /// Artemis projects use a generic `system.ini`, so it is deliberately an
+    /// all-of marker combined with an engine-specific PFS/script file. This
+    /// avoids classifying unrelated Windows games from `system.ini` alone.
+    static let artemis = SignatureGameDetector(
+        descriptor: EngineDescriptor(
+            id: EngineID(rawValue: "artemis"),
+            displayName: "Artemis",
+            compatibilityVersion: "ASB / IET / PFS"
+        ),
+        requiredAll: [
+            Rule(.file("system.ini"), kind: .requiredFile, detailCode: "artemis.systemIni", score: 35)
+        ],
+        requiredAny: [
+            Rule(.file("root.pfs"), kind: .requiredFile, detailCode: "artemis.rootPfs", score: 55),
+            Rule(.fileExtension("pfs"), kind: .requiredFile, detailCode: "artemis.pfs", score: 45),
+            Rule(.fileExtension("asb"), kind: .requiredFile, detailCode: "artemis.asb", score: 40),
+            Rule(.fileExtension("iet"), kind: .requiredFile, detailCode: "artemis.iet", score: 40)
+        ],
+        supporting: [
+            Rule(.file("tag.ini"), kind: .metadata, detailCode: "artemis.tagIni", score: 10),
+            Rule(.file("macro.iet"), kind: .characteristicFile, detailCode: "artemis.macro", score: 10),
+            Rule(.fileExtension("ast"), kind: .characteristicFile, detailCode: "artemis.ast", score: 5)
+        ],
         runtimeAvailable: true
     )
 

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <limits.h>
 #include <mutex>
 #include <new>
 #include <signal.h>
@@ -425,6 +426,9 @@ static UIWindow *FindSDLUIKitWindow(void) {
         // Never chdir into the imported game. Windows/mac exports ship
         // lib/python2.7/iosupport.py that uses pyobjus against macOS
         // Foundation paths and abort on iOS.
+        char previousWorkingDirectory[PATH_MAX] = {};
+        const bool capturedWorkingDirectory =
+            getcwd(previousWorkingDirectory, sizeof(previousWorkingDirectory)) != nullptr;
         if (!session->runtimeBasePath.empty()) {
             (void)chdir(session->runtimeBasePath.c_str());
             AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
@@ -468,6 +472,10 @@ static UIWindow *FindSDLUIKitWindow(void) {
             ? yume_renpy_modern_main(3, arguments)
             : yume_renpy_legacy_main(3, arguments);
         SDL_iPhoneSetEventPump(SDL_FALSE);
+        if (capturedWorkingDirectory) {
+            (void)chdir(previousWorkingDirectory);
+            AppendRenPyHostLog(session, "engine.cwd-restored");
+        }
         MirrorRenPyPythonLog(session);
         std::string resultLine = "engine.main-returned result=" + std::to_string(result) +
             " elapsed=" + std::to_string(CACurrentMediaTime() - startedAt) +

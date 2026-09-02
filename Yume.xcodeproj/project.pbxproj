@@ -153,6 +153,7 @@
 			);
 			outputPaths = (
 				"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
+				"$(SRCROOT)/ThirdParty/Art3m1s/Artifacts/$(PLATFORM_NAME)/libart3m1s_core.a",
 				"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
 				"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-modern.o",
 				"$(SRCROOT)/ThirdParty/RenPy/Artifacts/$(PLATFORM_NAME)/renpy-legacy.o",
@@ -184,6 +185,9 @@
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Runtimes/AetherKiri/default.otf",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Ruby/3.1.0/English.rb",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Assets.bundle/Shaders/simple.frag",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/YumeANGLE.framework/YumeANGLE",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libEGL.framework/libEGL",
+				"$(TARGET_BUILD_DIR)/$(FRAMEWORKS_FOLDER_PATH)/libGLESv2.framework/libGLESv2",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -342,9 +346,11 @@
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/angle/$(PLATFORM_NAME)/lib",
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib",
 				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/Art3m1s/Artifacts/$(PLATFORM_NAME)/libart3m1s_core.a",
 					"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
 					"-Wl,-force_load,$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp18-merged.o",
@@ -453,9 +459,11 @@
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/angle/$(PLATFORM_NAME)/lib",
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib",
 				);
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
 				MARKETING_VERSION = 0.1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"$(SRCROOT)/ThirdParty/Art3m1s/Artifacts/$(PLATFORM_NAME)/libart3m1s_core.a",
 					"$(SRCROOT)/ThirdParty/AetherKiri/Artifacts/$(PLATFORM_NAME)/libYumeAetherKiri.a",
 					"-Wl,-force_load,$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/engine/$(PLATFORM_NAME)/lib/libmkxpz-core.a",
 					"$(SRCROOT)/ThirdParty/MKXPZ/Artifacts/native/build-$(PLATFORM_NAME)-arm64/lib/mkxp18-merged.o",

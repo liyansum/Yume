@@ -401,10 +401,11 @@ private struct LicensesView: View {
                 Text("licenses.app.message")
             }
             Section("licenses.thirdparty.title") {
-                noticeRow("Yume", license: "GPL-3.0-or-later")
+                noticeRow("Yume", license: "AGPL-3.0-or-later")
                 noticeRow("zlib (via system libz)", license: "zlib", url: "https://www.zlib.net/zlib_license.html")
                 noticeRow("mkxp-z / Empo mobile fork", license: "GPL-2.0-or-later", url: "https://github.com/mateo-m/mkxp-z-apple-mobile")
                 noticeRow("AetherKiri 0.5 / OnscripterYuri", license: "GPL-3.0-or-later / GPL-2.0-or-later", url: "https://github.com/AetherKiri/AetherKiri")
+                noticeRow("art3m1s-core 0.2.2", license: "AGPL-3.0", url: "https://github.com/Alphaly2K/art3m1s-core")
                 noticeRow("Ren'Py 8.5.3 / 7.8.7 and Renios", license: "MIT AND LGPL-2.1-or-later AND Python-2.0", url: "https://github.com/renpy/renpy")
                 noticeRow("Ruffle 0.5.0", license: "Apache-2.0 OR MIT", url: "https://github.com/ruffle-rs/ruffle")
                 noticeRow("PLzmaSDK / LZMA SDK", license: "MIT AND public-domain", url: "https://github.com/OlehKulykov/PLzmaSDK")

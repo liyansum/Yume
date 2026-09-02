@@ -32,6 +32,10 @@ final class GameLaunchAdapterTests: XCTestCase {
             GameLaunchAdapters.plan(for: makeGame(engineID: "kirikiri")).kind,
             .hostedRuntime(runtimeIdentifier: "aetherkiri-kirikiri")
         )
+        XCTAssertEqual(
+            GameLaunchAdapters.plan(for: makeGame(engineID: "artemis")).kind,
+            .hostedRuntime(runtimeIdentifier: "art3m1s")
+        )
 
         let flash = GameLaunchAdapters.plan(for: makeGame(engineID: "flash"))
         XCTAssertEqual(

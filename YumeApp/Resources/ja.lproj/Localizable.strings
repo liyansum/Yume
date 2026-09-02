@@ -132,7 +132,7 @@
 "diagnostics.recovery.issues" = "復旧の問題";
 "diagnostics.offline.message" = "診断情報はこのデバイス内に留まり、ログ、クラッシュ、利用データはアップロードされません。";
 "licenses.app.title" = "Yume";
-"licenses.app.message" = "Yume のアプリコードはプロプライエタリです。このビルドには第三者ランタイム部品を含みません。";
+"licenses.app.message" = "Yume は AGPL-3.0-or-later で公開されています。このビルドは固定版の自由ソフトウェア互換ランタイムを静的に統合し、ソースのリビジョンを RuntimeDependencies.lock.json に記録しています。";
 "licenses.thirdparty.title" = "サードパーティ構成要素";
 "licenses.system.title" = "Apple システムフレームワーク";
 "licenses.system.message" = "このビルドは OS が提供する SwiftUI、Foundation、WebKit、Uniform Type Identifiers を使用します。";

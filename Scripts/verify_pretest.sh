@@ -46,6 +46,8 @@ required_resources=(
     ThirdParty/BundledResources/Ruby/1.9.1/English.rb
     ThirdParty/BundledResources/Ruby/3.1.0/English.rb
     Scripts/rebuild_mkxpz_core.sh
+    Scripts/build_art3m1s_runtime.sh
+    Scripts/Support/RuntimeFrameworkInfo.plist
 )
 for resource in "${required_resources[@]}"; do
     if [[ ! -s "$resource" ]]; then
@@ -83,6 +85,7 @@ required_project_fragments = (
     "renpy-legacy.o",
     "libYumeAetherKiri.a",
     "libmkxpz-core.a",
+    "libart3m1s_core.a",
 )
 for fragment in required_project_fragments:
     if fragment not in project_text:

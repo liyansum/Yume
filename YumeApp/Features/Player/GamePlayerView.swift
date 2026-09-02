@@ -626,7 +626,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
         private var runtime: NativeRuntimeSession?
         private var eventTask: Task<Void, Never>?
         private var logTask: Task<Void, Never>?
-        private var attachTask: Task<Void, Never>?
+        private var startTask: Task<Void, Never>?
         private var firstFrameWatchdog: Task<Void, Never>?
         private var isSuspended = false
         private var receivedFirstFrame = false
@@ -650,6 +650,19 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
 
         func install(runtime: NativeRuntimeSession, in container: UIView) {
             self.runtime = runtime
+            guard let gameView = runtime.nativeView() else {
+                onLog("native.view-unavailable", true, baseMetadata)
+                loadFailed = true
+                Task { await runtime.stop() }
+                self.runtime = nil
+                return
+            }
+            gameView.removeFromSuperview()
+            gameView.frame = container.bounds
+            gameView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            container.insertSubview(gameView, at: 0)
+            onLog("native.view-attached", false, baseMetadata)
+
             eventTask = Task { @MainActor [weak self] in
                 for await event in runtime.events {
                     guard let self else { return }
@@ -688,7 +701,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                     )
                 }
             }
-            attachTask = Task { @MainActor [weak self, weak container] in
+            startTask = Task { @MainActor [weak self] in
                 do {
                     try await runtime.start()
                 } catch {
@@ -700,25 +713,13 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                     self?.loadFailed = true
                     return
                 }
-                for _ in 0..<200 {
-                    guard let self, let container, self.runtime != nil else { return }
-                    if let gameView = runtime.nativeView() {
-                        gameView.removeFromSuperview()
-                        gameView.frame = container.bounds
-                        gameView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                        container.insertSubview(gameView, at: 0)
-                        onLog("native.view-attached", false, baseMetadata)
-                        firstFrameWatchdog = Task { @MainActor [weak self] in
-                            try? await Task.sleep(for: .seconds(60))
-                            guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
-                            onLog("native.first-frame-timeout", true, baseMetadata)
-                        }
-                        return
-                    }
-                    try? await Task.sleep(for: .milliseconds(25))
+                guard let self, self.runtime != nil else { return }
+                firstFrameWatchdog = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(60))
+                    guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
+                    onLog("native.first-frame-timeout", true, baseMetadata)
+                    loadFailed = true
                 }
-                self?.onLog("native.view-timeout", true, self?.baseMetadata ?? [:])
-                self?.loadFailed = true
             }
         }
 
@@ -744,8 +745,8 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             eventTask = nil
             logTask?.cancel()
             logTask = nil
-            attachTask?.cancel()
-            attachTask = nil
+            startTask?.cancel()
+            startTask = nil
             firstFrameWatchdog?.cancel()
             firstFrameWatchdog = nil
             guard let runtime else { return }

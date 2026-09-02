@@ -64,6 +64,7 @@ final class BuiltInGameDetectorsTests: XCTestCase {
             ("rpg-maker-mv", ["www/js/rpg_core.js"]),
             ("rpg-maker-mz", ["www/js/rmmz_core.js"]),
             ("onscripter", ["nscript.dat"]),
+            ("artemis", ["system.ini", "root.pfs"]),
             ("kirikiri", ["data.xp3"]),
             ("flash", ["movie.swf"]),
             ("tyranoscript", ["tyrano/tyrano.ks"])
@@ -81,6 +82,27 @@ final class BuiltInGameDetectorsTests: XCTestCase {
             }
             XCTAssertEqual(result.engine.id.rawValue, expectedID)
         }
+    }
+
+    func testArtemisRequiresSystemIniAndAnEngineSpecificMarker() throws {
+        let generic = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["system.ini"],
+            directories: []
+        )
+        XCTAssertEqual(BuiltInGameDetectors.registry.decide(generic), .noMatch)
+
+        let artemis = DetectionSnapshot(
+            rootRelativePath: try StorageRelativePath(rawValue: "original"),
+            regularFiles: ["SYSTEM.INI", "ROOT.PFS", "macro.iet"],
+            directories: []
+        )
+        guard case let .selected(result) = BuiltInGameDetectors.registry.decide(artemis) else {
+            return XCTFail("Expected Artemis detection")
+        }
+        XCTAssertEqual(result.engine.id.rawValue, "artemis")
+        XCTAssertEqual(result.compatibility.status, .runnable)
+        XCTAssertGreaterThanOrEqual(result.confidence, 90)
     }
 
     func testDetectsONS00TextAndCompiledRenPy() throws {
@@ -153,7 +175,7 @@ final class BuiltInGameDetectorsTests: XCTestCase {
         let catalog = GameEngineCatalog(detectors: BuiltInGameDetectors.registry.detectors)
         let expected = Set([
             "renpy", "rgss", "rpg-maker-mv", "rpg-maker-mz", "onscripter",
-            "kirikiri", "flash", "tyranoscript"
+            "kirikiri", "artemis", "flash", "tyranoscript"
         ].map { EngineID(rawValue: $0) })
 
         XCTAssertEqual(catalog.runnableEngineIDs, expected)

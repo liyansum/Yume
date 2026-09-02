@@ -54,7 +54,11 @@ public actor PlaySessionCoordinator {
     }
 
     public func start(gameID: GameID) async throws -> GamePlaySession {
-        if let active = activeID, active != gameID {
+        // A second presentation of the same game is still a second runtime
+        // session. Native engines own process-global SDL/Ruby/Python state,
+        // so allowing it races two providers just as surely as launching a
+        // different game does.
+        if let active = activeID {
             throw PlaySessionError.sessionAlreadyActive(active: active)
         }
 

@@ -109,6 +109,15 @@
         }
       ],
       "integration": "official-renios-isolated-static"
+    },
+    {
+      "id": "art3m1s-core",
+      "version": "0.2.2",
+      "source": "https://github.com/Alphaly2K/art3m1s-core",
+      "commit": "a4062c581d4a71c0dc7fdc8737ccdec00c723f4f",
+      "license": "AGPL-3.0-only",
+      "features": ["ASB", "IET", "AST", "PFS", "Luau", "CPU-RGBA-host"],
+      "integration": "pinned-source-build-static"
     }
   ]
 }

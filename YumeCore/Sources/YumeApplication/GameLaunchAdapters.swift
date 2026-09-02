@@ -72,6 +72,11 @@ public enum GameLaunchAdapters {
                 runtimeVersionLabel: "AetherKiri 0.5"
             ),
             SimpleLaunchAdapter(
+                engineID: "artemis",
+                kind: .hostedRuntime(runtimeIdentifier: "art3m1s"),
+                runtimeVersionLabel: "art3m1s-core 0.2.2"
+            ),
+            SimpleLaunchAdapter(
                 engineID: "flash",
                 kind: .embeddedWebRuntime(runtimeIdentifier: "ruffle-web"),
                 runtimeVersionLabel: "Ruffle Web"

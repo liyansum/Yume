@@ -18,3 +18,7 @@ const YumeRuntimeProviderAPI *yume_aetherkiri_kirikiri_runtime_provider(void) {
 const YumeRuntimeProviderAPI *yume_renios_runtime_provider(void) {
     return NULL;
 }
+
+const YumeRuntimeProviderAPI *yume_art3m1s_runtime_provider(void) {
+    return NULL;
+}

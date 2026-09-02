@@ -6,6 +6,8 @@ import UIKit
 
 public enum NativeRuntimeHostError: Error, Sendable, Equatable {
     case unavailable(String)
+    case sessionAlreadyActive
+    case processRequiresRestart
     case creationFailed(runtimeIdentifier: String, code: Int32)
     case operationFailed(operation: String, code: Int32)
 }
@@ -40,7 +42,10 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     private let callbackContext: UnsafeMutableRawPointer
     private let lock = NSLock()
     private var handle: OpaquePointer?
+    private var started = false
+    private var stopRequested = false
     private var destroyed = false
+    private var ownsProcessGate = false
 
     public static func isAvailable(runtimeIdentifier: String) -> Bool {
         runtimeIdentifier.withCString { yume_runtime_is_available($0) != 0 }
@@ -62,7 +67,17 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         )
         callbackContext = Unmanaged.passRetained(sink).toOpaque()
 
+        if let gateError = NativeRuntimeProcessGate.claim() {
+            sink.finish()
+            Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
+            throw gateError
+        }
+        ownsProcessGate = true
+
         guard Self.isAvailable(runtimeIdentifier: runtimeIdentifier) else {
+            ownsProcessGate = false
+            NativeRuntimeProcessGate.release(cleanShutdown: true)
+            sink.finish()
             Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
             throw NativeRuntimeHostError.unavailable(runtimeIdentifier)
         }
@@ -84,6 +99,9 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
             }
         }
         guard handle != nil else {
+            ownsProcessGate = false
+            NativeRuntimeProcessGate.release(cleanShutdown: true)
+            sink.finish()
             Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
             throw NativeRuntimeHostError.creationFailed(
                 runtimeIdentifier: runtimeIdentifier,
@@ -93,11 +111,19 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     }
 
     deinit {
-        destroy()
+        // Normal owners await stop(), which keeps the process gate held until
+        // the provider reports that its engine loop has actually exited. A
+        // dropped live session cannot prove that SDL/Ruby/Python finished, so
+        // poison the gate and require an app restart instead of risking a
+        // second provider entering process-global runtime state.
+        destroy(cleanShutdown: !started || sink.hasStopped)
     }
 
     public func start() async throws {
-        try checked("start") { yume_runtime_session_start($0) }
+        let result = beginStart()
+        guard result == 0 else {
+            throw NativeRuntimeHostError.operationFailed(operation: "start", code: result)
+        }
     }
 
     public func pause() async {
@@ -127,7 +153,34 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     }
 
     public func stop() async {
-        _ = withHandle { yume_runtime_session_stop($0) }
+        guard let (wasStarted, result) = beginStop() else { return }
+
+        let providerStopped: Bool
+        if wasStarted, result == 0 {
+            providerStopped = await sink.waitUntilStopped()
+        } else {
+            providerStopped = !wasStarted
+        }
+        destroy(cleanShutdown: providerStopped)
+    }
+
+    private func beginStart() -> Int32 {
+        lock.withLock {
+            guard !destroyed, !stopRequested, !started, let handle else { return -1 }
+            let result = yume_runtime_session_start(handle)
+            if result == 0 { started = true }
+            return result
+        }
+    }
+
+    private func beginStop() -> (wasStarted: Bool, result: Int32)? {
+        lock.withLock {
+            guard !destroyed, let handle else { return nil }
+            let wasStarted = started
+            if stopRequested { return (wasStarted, 0) }
+            stopRequested = true
+            return (wasStarted, yume_runtime_session_stop(handle))
+        }
     }
 
 #if canImport(UIKit)
@@ -140,36 +193,35 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     }
 #endif
 
-    private func checked(
-        _ operation: String,
-        _ body: (OpaquePointer) -> Int32
-    ) throws {
-        let result = withHandle(body) ?? -1
-        guard result == 0 else {
-            throw NativeRuntimeHostError.operationFailed(operation: operation, code: result)
-        }
-    }
-
     private func withHandle<Result>(_ body: (OpaquePointer) -> Result) -> Result? {
         lock.lock()
         defer { lock.unlock() }
-        guard !destroyed, let handle else { return nil }
+        guard !destroyed, !stopRequested, let handle else { return nil }
         return body(handle)
     }
 
-    private func destroy() {
+    private func destroy(cleanShutdown: Bool) {
         lock.lock()
         guard !destroyed else {
             lock.unlock()
             return
         }
         destroyed = true
+        if !stopRequested, let handle {
+            stopRequested = true
+            _ = yume_runtime_session_stop(handle)
+        }
         var ownedHandle = handle
         handle = nil
+        let releaseProcessGate = ownsProcessGate
+        ownsProcessGate = false
         lock.unlock()
 
         yume_runtime_session_destroy(&ownedHandle)
         sink.finish()
+        if releaseProcessGate {
+            NativeRuntimeProcessGate.release(cleanShutdown: cleanShutdown)
+        }
         Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
     }
 
@@ -270,6 +322,9 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncStream<EngineEvent>.Continuation?
     private var logContinuation: AsyncStream<NativeRuntimeLogRecord>.Continuation?
+    private var stopWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var stopped = false
+    private var finished = false
 
     init(
         continuation: AsyncStream<EngineEvent>.Continuation,
@@ -282,19 +337,33 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
     func yield(_ event: EngineEvent) {
         lock.lock()
         let continuation = continuation
+        let waiters: [CheckedContinuation<Bool, Never>]
+        if case .stopped = event {
+            stopped = true
+            waiters = stopWaiters
+            stopWaiters.removeAll()
+        } else {
+            waiters = []
+        }
         lock.unlock()
         continuation?.yield(event)
+        waiters.forEach { $0.resume(returning: true) }
     }
 
     func finish() {
         lock.lock()
         let continuation = continuation
         let logContinuation = logContinuation
+        let waiters = stopWaiters
+        let stopped = stopped
         self.continuation = nil
         self.logContinuation = nil
+        stopWaiters.removeAll()
+        finished = true
         lock.unlock()
         continuation?.finish()
         logContinuation?.finish()
+        waiters.forEach { $0.resume(returning: stopped) }
     }
 
     func yieldLog(_ record: NativeRuntimeLogRecord) {
@@ -302,6 +371,51 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
         let continuation = logContinuation
         lock.unlock()
         continuation?.yield(record)
+    }
+
+    var hasStopped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stopped
+    }
+
+    func waitUntilStopped() async -> Bool {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if stopped || finished {
+                let result = stopped
+                lock.unlock()
+                continuation.resume(returning: result)
+            } else {
+                stopWaiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+}
+
+/// Process-wide admission control for native providers. Reference players use
+/// separate executables to isolate runtime globals; Yume is a single process,
+/// so overlapping create/stop windows must be rejected explicitly.
+private enum NativeRuntimeProcessGate {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var active = false
+    nonisolated(unsafe) private static var poisoned = false
+
+    static func claim() -> NativeRuntimeHostError? {
+        lock.lock()
+        defer { lock.unlock() }
+        if poisoned { return .processRequiresRestart }
+        if active { return .sessionAlreadyActive }
+        active = true
+        return nil
+    }
+
+    static func release(cleanShutdown: Bool) {
+        lock.lock()
+        active = false
+        if !cleanShutdown { poisoned = true }
+        lock.unlock()
     }
 }
 

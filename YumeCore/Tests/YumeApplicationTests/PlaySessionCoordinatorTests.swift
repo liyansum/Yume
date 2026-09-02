@@ -60,13 +60,17 @@ final class PlaySessionCoordinatorTests: XCTestCase {
         }
     }
 
-    func testRestartingSameGameIsAllowed() async throws {
+    func testStartingSameGameAgainIsRejectedWhileSessionIsActive() async throws {
         let game = makeGame(engineID: "rpg-maker-mz")
         let coordinator = makeCoordinator(games: [game])
 
         _ = try await coordinator.start(gameID: game.id)
-        let restarted = try await coordinator.start(gameID: game.id)
-        XCTAssertEqual(restarted.content.game.id, game.id)
+        do {
+            _ = try await coordinator.start(gameID: game.id)
+            XCTFail("Expected session exclusivity violation")
+        } catch let error as PlaySessionError {
+            XCTAssertEqual(error, .sessionAlreadyActive(active: game.id))
+        }
     }
 
     func testStopReleasesExclusiveSlot() async throws {

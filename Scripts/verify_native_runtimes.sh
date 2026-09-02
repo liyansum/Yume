@@ -30,6 +30,7 @@ angle_lib="$project_root/ThirdParty/MKXPZ/Artifacts/angle/$platform_name/lib"
 engine_lib="$project_root/ThirdParty/MKXPZ/Artifacts/engine/$platform_name/lib"
 renpy_lib="$project_root/ThirdParty/RenPy/Artifacts/$platform_name"
 aether_lib="$project_root/ThirdParty/AetherKiri/Artifacts/$platform_name"
+art3m1s_root="$project_root/ThirdParty/Art3m1s/Artifacts/$platform_name"
 
 artifacts=(
     "$aether_lib/libYumeAetherKiri.a"
@@ -43,6 +44,10 @@ artifacts=(
     "$angle_lib/libGLESv2_static.a"
     "$renpy_lib/renpy-modern.o"
     "$renpy_lib/renpy-legacy.o"
+    "$art3m1s_root/libart3m1s_core.a"
+    "$art3m1s_root/Frameworks/YumeANGLE.framework/YumeANGLE"
+    "$art3m1s_root/Frameworks/libEGL.framework/libEGL"
+    "$art3m1s_root/Frameworks/libGLESv2.framework/libGLESv2"
 )
 for artifact in "${artifacts[@]}"; do
     [[ -s "$artifact" ]] || { echo "Native runtime artifact is missing: $artifact" >&2; exit 3; }
@@ -81,5 +86,7 @@ require_symbol "$mkxp_lib/libSDL2.a" SDL_GetWindowFromID
 require_symbol "$mkxp_lib/libSDL2.a" SDL_GetWindowWMInfo
 require_symbol "$renpy_lib/renpy-modern.o" yume_renpy_modern_main
 require_symbol "$renpy_lib/renpy-legacy.o" yume_renpy_legacy_main
+require_symbol "$art3m1s_root/libart3m1s_core.a" art3m1s_runtime_create
+require_symbol "$art3m1s_root/libart3m1s_core.a" art3m1s_runtime_advance_and_render
 
 echo "Verified native runtime artifacts for $platform_name/arm64."

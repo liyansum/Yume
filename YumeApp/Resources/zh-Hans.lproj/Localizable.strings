@@ -132,7 +132,7 @@
 "diagnostics.recovery.issues" = "恢复问题";
 "diagnostics.offline.message" = "诊断数据仅保留在此设备上；Yume 不上传日志、崩溃或使用数据。";
 "licenses.app.title" = "Yume";
-"licenses.app.message" = "Yume 应用代码为专有代码。此构建未包含第三方运行时组件。";
+"licenses.app.message" = "Yume 按 AGPL-3.0-or-later 开源。本构建静态集成固定版本的自由软件兼容运行时；其源码版本记录在 RuntimeDependencies.lock.json。";
 "licenses.thirdparty.title" = "第三方组件";
 "licenses.system.title" = "Apple 系统框架";
 "licenses.system.message" = "此构建使用操作系统提供的 SwiftUI、Foundation、WebKit 与统一类型标识框架。";
