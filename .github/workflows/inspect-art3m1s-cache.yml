@@ -1,0 +1,59 @@
+name: Inspect Art3m1s build cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-cache:
+    name: Inspect cached Rust archives
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Restore native build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .native-build/downloads
+            .native-build/vcpkg-downloads
+            .native-build/vcpkg-binary-cache
+            .native-build/art3m1s
+          key: yume-native-cache-v5-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/workflows/build-test-ipa.yml', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/AetherKiri/Source/vcpkg-configuration.json', 'ThirdParty/AetherKiri/Source/vcpkg.json', 'ThirdParty/AetherKiri/Source/vcpkg/triplets/*.cmake', 'ThirdParty/AetherKiri/Source/vcpkg/ports/**') }}
+          fail-on-cache-miss: true
+
+      - name: Inspect Art3m1s archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_root=".native-build/art3m1s/target/aarch64-apple-ios/release"
+          archives=()
+          while IFS= read -r archive; do
+            archives+=("$archive")
+          done < <(find "$release_root" -maxdepth 2 -type f \
+            -name 'libart3m1s_core*.a' -size +0c -print | sort)
+          if (( ${#archives[@]} == 0 )); then
+            echo "No cached Art3m1s static archives were found." >&2
+            exit 3
+          fi
+          for archive in "${archives[@]}"; do
+            echo "::group::$archive"
+            stat -f 'size=%z modified=%Sm' "$archive"
+            file "$archive"
+            echo "members=$(/usr/bin/ar -t "$archive" | wc -l | tr -d ' ')"
+            symbols="$(xcrun nm -gUj "$archive" 2>/dev/null | \
+              grep -E '^_art3m1s_(runtime_|register_|set_)' || true)"
+            if [[ -n "$symbols" ]]; then
+              printf '%s\n' "$symbols" | sort -u
+            else
+              echo "No Art3m1s host FFI symbols."
+            fi
+            echo "::endgroup::"
+          done
