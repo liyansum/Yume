@@ -65,16 +65,25 @@ cargo rustc --manifest-path "$source_root/Cargo.toml" --release \
     --target "$rust_target" --lib -- --crate-type staticlib
 
 release_root="$CARGO_TARGET_DIR/$rust_target/release"
-built_archive="$release_root/libart3m1s_core.a"
-if [[ ! -s "$built_archive" ]]; then
-    # cargo rustc places command-line-only crate types in deps/ on newer
-    # toolchains instead of promoting them to the profile directory.
-    built_archive="$(find "$release_root" -maxdepth 2 -type f \
-        -name 'libart3m1s_core*.a' -size +0c -print -quit)"
-fi
+built_archive=""
+# cargo rustc places command-line-only crate types in deps/ on newer
+# toolchains. Select the actual staticlib by its exported host ABI instead of
+# trusting a possibly stale profile-root file with the same basename.
+while IFS= read -r -d '' candidate; do
+    if (
+        set +o pipefail
+        xcrun nm -gUj "$candidate" 2>/dev/null | \
+            grep -Fx '_art3m1s_runtime_create' >/dev/null
+    ); then
+        built_archive="$candidate"
+        break
+    fi
+done < <(find "$release_root" -maxdepth 2 -type f \
+    -name 'libart3m1s_core*.a' -size +0c -print0)
 if [[ -z "$built_archive" ]] || [[ ! -s "$built_archive" ]]; then
-    echo "art3m1s static archive was not produced; release artifacts:" >&2
-    find "$release_root" -maxdepth 2 -type f -print >&2 || true
+    echo "art3m1s static archive with the host FFI was not produced; candidates:" >&2
+    find "$release_root" -maxdepth 2 -type f \
+        -name 'libart3m1s_core*.a' -size +0c -print >&2 || true
     exit 3
 fi
 mkdir -p "$artifact_root"
@@ -125,4 +134,4 @@ for binary in "$central" "$framework_root/libEGL.framework/libEGL" \
               "$framework_root/libGLESv2.framework/libGLESv2"; do
     xcrun lipo "$binary" -verify_arch arm64
 done
-echo "Built art3m1s runtime: $core_archive"
+echo "Built art3m1s runtime from $built_archive: $core_archive"

@@ -48,6 +48,11 @@ jobs:
             stat -f 'size=%z modified=%Sm' "$archive"
             file "$archive"
             echo "members=$(/usr/bin/ar -t "$archive" | wc -l | tr -d ' ')"
+            set +e
+            xcrun nm -gUj "$archive" >/dev/null 2>&1
+            nm_status=$?
+            set -e
+            echo "nm_exit_status=$nm_status"
             symbols="$(xcrun nm -gUj "$archive" 2>/dev/null | \
               grep -E '^_art3m1s_(runtime_|register_|set_)' || true)"
             if [[ -n "$symbols" ]]; then
@@ -57,3 +62,19 @@ jobs:
             fi
             echo "::endgroup::"
           done
+
+          copied_archive="$RUNNER_TEMP/libart3m1s_core.a"
+          /usr/bin/ditto --noqtn "${archives[0]}" "$copied_archive"
+          for required_symbol in \
+            _art3m1s_runtime_create \
+            _art3m1s_runtime_advance_and_render; do
+            if ! (
+              set +o pipefail
+              xcrun nm -gUj "$copied_archive" 2>/dev/null | \
+                grep -Fx "$required_symbol" >/dev/null
+            ); then
+              echo "Required symbol is missing after archive copy: $required_symbol" >&2
+              exit 4
+            fi
+          done
+          echo "Copied archive passes host FFI verification."

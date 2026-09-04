@@ -57,10 +57,15 @@ done
 require_symbol() {
     local artifact="$1"
     local symbol="$2"
-    # Do not use grep -q here. With pipefail and a large merged archive, an
-    # early grep exit sends SIGPIPE to nm and turns a successful match into a
-    # failed pipeline. -gUj also limits the check to defined global symbols.
-    if ! xcrun nm -gUj "$artifact" 2>/dev/null | grep -Fx "_$symbol" >/dev/null; then
+    # Rust staticlibs can contain metadata or compiler-builtins members that
+    # make Apple's nm return non-zero after it has emitted valid symbols. The
+    # check is about the requested definition, so deliberately use grep's
+    # result rather than pipefail's aggregate status. -gUj limits output to
+    # defined global symbol names.
+    if ! (
+        set +o pipefail
+        xcrun nm -gUj "$artifact" 2>/dev/null | grep -Fx "_$symbol" >/dev/null
+    ); then
         echo "Required native symbol _$symbol is missing from $artifact" >&2
         exit 4
     fi
