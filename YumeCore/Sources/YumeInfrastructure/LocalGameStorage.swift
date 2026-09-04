@@ -770,26 +770,33 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             .isRegularFileKey,
             .isSymbolicLinkKey
         ]
-        let exact = directory.appendingPathComponent(name)
-        if let values = try? exact.resourceValues(forKeys: keys),
-           values.isSymbolicLink != true,
-           expectedDirectory ? values.isDirectory == true : values.isRegularFile == true {
-            return exact
-        }
         let children = try fileManager.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: Array(keys),
             options: []
         )
+        func matchesExpectedType(_ child: URL) throws -> Bool {
+            let values = try child.resourceValues(forKeys: keys)
+            return values.isSymbolicLink != true &&
+                (expectedDirectory ? values.isDirectory == true : values.isRegularFile == true)
+        }
+        // Always return the spelling recorded by the directory entry. On a
+        // case-insensitive macOS volume, probing `directory/www` succeeds for
+        // a real `WWW` entry but leaves the caller with the invented lowercase
+        // URL, which then leaks into the persisted runtime entry point.
+        if let exact = try children.first(where: { child in
+            guard child.lastPathComponent == name else { return false }
+            return try matchesExpectedType(child)
+        }) {
+            return exact
+        }
         return try children.first { child in
             guard child.lastPathComponent.compare(
                 name,
                 options: [.caseInsensitive, .diacriticInsensitive],
                 locale: Locale(identifier: "en_US_POSIX")
             ) == .orderedSame else { return false }
-            let values = try child.resourceValues(forKeys: keys)
-            return values.isSymbolicLink != true &&
-                (expectedDirectory ? values.isDirectory == true : values.isRegularFile == true)
+            return try matchesExpectedType(child)
         }
     }
 
