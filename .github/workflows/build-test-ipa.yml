@@ -72,12 +72,29 @@ jobs:
             ThirdParty/Art3m1s/Artifacts
           key: yume-native-artifacts-v1-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('Scripts/build_native_runtimes.sh', 'Scripts/build_aetherkiri_runtime.sh', 'Scripts/build_art3m1s_runtime.sh', 'Scripts/build_renpy_runtime.sh', 'Scripts/rebuild_mkxpz_core.sh', 'Scripts/stage_mkxpz_runtime.sh', 'Scripts/stage_renpy_runtime.sh', 'Scripts/verify_native_runtimes.sh', 'Scripts/Support/RuntimeFrameworkInfo.plist', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/RenPy/renpy_entry.c', 'ThirdParty/AetherKiri/Source/**', 'ThirdParty/MKXPZ/Source/**') }}
 
-      - name: Enable verified native artifact reuse
-        if: steps.native-artifacts.outputs.cache-hit == 'true'
-        run: echo 'YUME_SKIP_NATIVE_RUNTIME_BUILD=1' >> "$GITHUB_ENV"
-
       - name: Run pre-test gate
         run: Scripts/verify_pretest.sh
+
+      - name: Build uncached native runtimes
+        if: steps.native-artifacts.outputs.cache-hit != 'true'
+        run: Scripts/build_native_runtimes.sh iphoneos
+
+      # Save immediately after native verification. Host ObjC++/Swift errors
+      # later in xcodebuild must not force the next diagnostic run to rebuild
+      # AetherKiri, mkxp-z, Ren'Py and art3m1s from scratch.
+      - name: Save verified native artifacts
+        if: steps.native-artifacts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ThirdParty/AetherKiri/Artifacts
+            ThirdParty/MKXPZ/Artifacts
+            ThirdParty/RenPy/Artifacts
+            ThirdParty/Art3m1s/Artifacts
+          key: yume-native-artifacts-v1-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('Scripts/build_native_runtimes.sh', 'Scripts/build_aetherkiri_runtime.sh', 'Scripts/build_art3m1s_runtime.sh', 'Scripts/build_renpy_runtime.sh', 'Scripts/rebuild_mkxpz_core.sh', 'Scripts/stage_mkxpz_runtime.sh', 'Scripts/stage_renpy_runtime.sh', 'Scripts/verify_native_runtimes.sh', 'Scripts/Support/RuntimeFrameworkInfo.plist', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/RenPy/renpy_entry.c', 'ThirdParty/AetherKiri/Source/**', 'ThirdParty/MKXPZ/Source/**') }}
+
+      - name: Reuse prepared native artifacts in Xcode
+        run: echo 'YUME_SKIP_NATIVE_RUNTIME_BUILD=1' >> "$GITHUB_ENV"
 
       - name: Build unsigned device app
         run: |
@@ -96,17 +113,6 @@ jobs:
             DEVELOPMENT_TEAM= \
             COMPILER_INDEX_STORE_ENABLE=NO \
             build
-
-      - name: Save verified native artifacts
-        if: steps.native-artifacts.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ThirdParty/AetherKiri/Artifacts
-            ThirdParty/MKXPZ/Artifacts
-            ThirdParty/RenPy/Artifacts
-            ThirdParty/Art3m1s/Artifacts
-          key: yume-native-artifacts-v1-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('Scripts/build_native_runtimes.sh', 'Scripts/build_aetherkiri_runtime.sh', 'Scripts/build_art3m1s_runtime.sh', 'Scripts/build_renpy_runtime.sh', 'Scripts/rebuild_mkxpz_core.sh', 'Scripts/stage_mkxpz_runtime.sh', 'Scripts/stage_renpy_runtime.sh', 'Scripts/verify_native_runtimes.sh', 'Scripts/Support/RuntimeFrameworkInfo.plist', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/RenPy/renpy_entry.c', 'ThirdParty/AetherKiri/Source/**', 'ThirdParty/MKXPZ/Source/**') }}
 
       - name: Save native cache after build
         if: always() && steps.native-cache.outputs.cache-hit != 'true'

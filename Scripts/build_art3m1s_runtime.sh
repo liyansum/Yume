@@ -93,9 +93,10 @@ central="$framework_root/YumeANGLE.framework/YumeANGLE"
 mkdir -p "$(dirname "$central")"
 sdk_root="$(xcrun --sdk "$sdk" --show-sdk-path)"
 xcrun --sdk "$sdk" clang++ -dynamiclib -arch arm64 -isysroot "$sdk_root" \
-    "$minimum_flag" -Wl,-all_load \
-    "$angle_lib/libEGL_static.a" "$angle_lib/libGLESv2_static.a" \
-    "$angle_lib/libANGLE_static.a" -Wl,-noall_load \
+    "$minimum_flag" \
+    -Wl,-force_load,"$angle_lib/libEGL_static.a" \
+    -Wl,-force_load,"$angle_lib/libGLESv2_static.a" \
+    -Wl,-force_load,"$angle_lib/libANGLE_static.a" \
     -Wl,-install_name,@rpath/YumeANGLE.framework/YumeANGLE \
     -framework Foundation -framework CoreGraphics -framework IOSurface \
     -framework Metal -framework QuartzCore -o "$central"
