@@ -15,11 +15,11 @@ struct SaveStorageResult {
 
 bool IsOnsSaveFileName(const std::filesystem::path &path);
 
-// Prefer a save directory beside the game so saves travel with an imported
-// package. The app-owned directory remains a fallback for read-only media.
-// Existing files are copied without overwriting newer destination files.
+// Prefer the host-owned per-game save directory. Older builds wrote beside
+// the imported game, so those files are migration sources and a last-resort
+// fallback only. Existing files never overwrite the canonical destination.
 SaveStorageResult PrepareSaveStorage(
     const std::filesystem::path &game_root,
-    const std::filesystem::path &legacy_directory);
+    const std::filesystem::path &host_directory);
 
 } // namespace aetherkiri::onscripter

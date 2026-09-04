@@ -246,15 +246,16 @@ public extension SignatureGameDetector {
         requiredAny: [
             Rule(.file("0.txt"), kind: .requiredFile, detailCode: "ons.script.text", score: 75),
             Rule(.file("00.txt"), kind: .requiredFile, detailCode: "ons.script.text00", score: 75),
+            Rule(.file("nscr_sec.dat"), kind: .requiredFile, detailCode: "ons.script.sec", score: 75),
+            Rule(.file("nscript.___"), kind: .requiredFile, detailCode: "ons.script.keyed", score: 75),
             Rule(.file("nscript.dat"), kind: .requiredFile, detailCode: "ons.script.dat", score: 75),
-            Rule(.fileExtension("nt2"), kind: .requiredFile, detailCode: "ons.script.nt2", score: 40),
-            Rule(.fileExtension("nt3"), kind: .requiredFile, detailCode: "ons.script.nt3", score: 40)
+            Rule(.file("onscript.nt2"), kind: .requiredFile, detailCode: "ons.script.nt2", score: 75),
+            Rule(.file("onscript.nt3"), kind: .requiredFile, detailCode: "ons.script.nt3", score: 75)
         ],
         supporting: [
             Rule(.fileExtension("nsa"), kind: .characteristicFile, detailCode: "ons.archive.nsa", score: 20),
             Rule(.fileExtension("sar"), kind: .characteristicFile, detailCode: "ons.archive.sar", score: 20)
         ],
-        blockingExtensions: ["nt2", "nt3"],
         runtimeAvailable: true
     )
 

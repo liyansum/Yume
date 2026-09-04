@@ -38,6 +38,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     public let logs: AsyncStream<NativeRuntimeLogRecord>
 
     private let runtimeIdentifier: String
+    private let stopTimeout: TimeInterval
     private let sink: NativeRuntimeEventSink
     private let callbackContext: UnsafeMutableRawPointer
     private let lock = NSLock()
@@ -54,9 +55,11 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     public init(
         runtimeIdentifier: String,
         game: PreparedGame,
-        context: EngineContext
+        context: EngineContext,
+        stopTimeout: TimeInterval = 5
     ) throws {
         self.runtimeIdentifier = runtimeIdentifier
+        self.stopTimeout = max(0, stopTimeout)
         let pair = AsyncStream<EngineEvent>.makeStream()
         let logPair = AsyncStream<NativeRuntimeLogRecord>.makeStream()
         events = pair.stream
@@ -157,9 +160,17 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
 
         let providerStopped: Bool
         if wasStarted, result == 0 {
-            providerStopped = await sink.waitUntilStopped()
+            providerStopped = await sink.waitUntilStopped(timeout: stopTimeout)
         } else {
             providerStopped = !wasStarted
+        }
+        if wasStarted, !providerStopped {
+            sink.yield(.warning(code: "runtime.stop-timeout"))
+            sink.yieldLog(NativeRuntimeLogRecord(
+                level: .error,
+                subsystem: "native-host",
+                message: "Provider \(runtimeIdentifier) did not report a stopped event within \(stopTimeout) seconds; the process runtime gate is now poisoned."
+            ))
         }
         destroy(cleanShutdown: providerStopped)
     }
@@ -318,11 +329,11 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     }
 }
 
-private final class NativeRuntimeEventSink: @unchecked Sendable {
+final class NativeRuntimeEventSink: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: AsyncStream<EngineEvent>.Continuation?
     private var logContinuation: AsyncStream<NativeRuntimeLogRecord>.Continuation?
-    private var stopWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var stopWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
     private var stopped = false
     private var finished = false
 
@@ -340,7 +351,7 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
         let waiters: [CheckedContinuation<Bool, Never>]
         if case .stopped = event {
             stopped = true
-            waiters = stopWaiters
+            waiters = Array(stopWaiters.values)
             stopWaiters.removeAll()
         } else {
             waiters = []
@@ -354,7 +365,7 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
         lock.lock()
         let continuation = continuation
         let logContinuation = logContinuation
-        let waiters = stopWaiters
+        let waiters = Array(stopWaiters.values)
         let stopped = stopped
         self.continuation = nil
         self.logContinuation = nil
@@ -379,18 +390,31 @@ private final class NativeRuntimeEventSink: @unchecked Sendable {
         return stopped
     }
 
-    func waitUntilStopped() async -> Bool {
+    func waitUntilStopped(timeout: TimeInterval) async -> Bool {
         await withCheckedContinuation { continuation in
+            let waiterID = UUID()
             lock.lock()
             if stopped || finished {
                 let result = stopped
                 lock.unlock()
                 continuation.resume(returning: result)
             } else {
-                stopWaiters.append(continuation)
+                stopWaiters[waiterID] = continuation
                 lock.unlock()
+                DispatchQueue.global(qos: .utility).asyncAfter(
+                    deadline: .now() + max(0, timeout)
+                ) { [weak self] in
+                    self?.expireStopWaiter(waiterID)
+                }
             }
         }
+    }
+
+    private func expireStopWaiter(_ waiterID: UUID) {
+        lock.lock()
+        let waiter = stopWaiters.removeValue(forKey: waiterID)
+        lock.unlock()
+        waiter?.resume(returning: false)
     }
 }
 

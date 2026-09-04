@@ -13,9 +13,10 @@ by Yume's shared, patched mobile SDL build.
 
 The generated Python homes under `ThirdParty/BundledResources/Runtimes/RenPy*` were
 produced with the matching official SDK's `ios_create` command. They contain
-only engine/runtime files; imported game content is selected with Ren'Py's
-`--basedir` option at launch. The corresponding upstream license notices are
-bundled beside each runtime.
+only engine/runtime files; imported game content is passed to Ren'Py as the
+positional basedir argument after `argv[0]`. Passing `--basedir` directly to
+the embedded Python launcher is invalid and exits before Ren'Py starts. The
+corresponding upstream license notices are bundled beside each runtime.
 
 Yume's small distributor patch routes saves through `RENPY_PATH_TO_SAVES` and
 executes `base/environment.txt` before importing Ren'Py. That policy replaces

@@ -8,10 +8,8 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
-#include <fcntl.h>
 #include <mutex>
 #include <new>
-#include <signal.h>
 #include <string>
 #include <unistd.h>
 #include <vector>
@@ -29,7 +27,7 @@ enum class MKXPRGSSGeneration { XP, VX, VXAce };
 
 struct MKXPSession;
 
-@interface YumeMKXPHostView : UIView
+@interface YumeMKXPHostView : UIView <UITextFieldDelegate>
 - (instancetype)initWithSession:(MKXPSession *)session;
 - (void)startEngineIfAttached;
 - (void)syncHostMetalLayer;
@@ -37,6 +35,9 @@ struct MKXPSession;
                        width:(int)width
                       height:(int)height;
 - (void)presentCPUFrame:(NSData *)data width:(int)width height:(int)height;
+- (void)presentEngineInformation:(NSString *)message;
+- (void)dismissEngineInformation;
+- (void)setTextInputActive:(BOOL)active;
 - (void)detachSession;
 @end
 
@@ -57,7 +58,10 @@ struct MKXPSession {
     __strong YumeMKXPHostView *view = nil;
     std::atomic<bool> running{false};
     std::atomic<bool> everStarted{false};
+    std::atomic<bool> launchScheduled{false};
+    std::atomic<bool> mainEntered{false};
     std::atomic<bool> mainReturned{false};
+    std::atomic<bool> stopRequested{false};
     std::atomic<bool> destroyRequested{false};
     std::atomic<bool> stoppedEventSent{false};
     std::atomic<uint64_t> cpuFrameCallbacks{0};
@@ -126,55 +130,6 @@ static void AppendMKXPPathSummary(MKXPSession *session, const char *label,
 
 static std::mutex gMKXPClaimMutex;
 static bool gMKXPClaimed = false;
-static volatile sig_atomic_t gMKXPCrashLogFD = -1;
-
-static void MKXPCrashSignalHandler(int signalNumber) {
-    const int fd = static_cast<int>(gMKXPCrashLogFD);
-    if (fd < 0) return;
-    static const char prefix[] = "native.crash signal=";
-    (void)write(fd, prefix, sizeof(prefix) - 1);
-    char number[16] = {};
-    unsigned int value = signalNumber < 0
-        ? static_cast<unsigned int>(-signalNumber)
-        : static_cast<unsigned int>(signalNumber);
-    int index = static_cast<int>(sizeof(number)) - 2;
-    do {
-        number[index--] = static_cast<char>('0' + value % 10u);
-        value /= 10u;
-    } while (value > 0 && index >= 0);
-    if (signalNumber < 0 && index >= 0) number[index--] = '-';
-    (void)write(fd, number + index + 1, sizeof(number) - index - 2);
-    (void)write(fd, "\n", 1);
-    (void)fsync(fd);
-}
-
-static void InstallMKXPCrashBreadcrumb(MKXPSession *session) {
-    if (session == nullptr || session->logRoot.empty()) return;
-    @autoreleasepool {
-        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
-        if (root.length == 0) return;
-        [[NSFileManager defaultManager] createDirectoryAtPath:root
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nil];
-        NSString *path = [root stringByAppendingPathComponent:@"mkxp-crash.log"];
-        const int fd = open(path.fileSystemRepresentation,
-                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-        if (fd < 0) return;
-        const int previous = static_cast<int>(gMKXPCrashLogFD);
-        gMKXPCrashLogFD = fd;
-        if (previous >= 0) close(previous);
-        const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
-        for (const int signalNumber : signals) {
-            struct sigaction action {};
-            action.sa_handler = MKXPCrashSignalHandler;
-            sigemptyset(&action.sa_mask);
-            action.sa_flags = SA_RESETHAND;
-            (void)sigaction(signalNumber, &action, nullptr);
-        }
-    }
-    AppendMKXPHostLog(session, "crash-handler.install.end");
-}
 
 static void ReleaseMKXPClaimAfterFailedCreation(void) {
     std::lock_guard<std::mutex> lock(gMKXPClaimMutex);
@@ -314,6 +269,8 @@ static void MKXPDebugLogMirror(const char *tag, const char *source,
     }
 }
 
+static void MKXPTextInputMode(int32_t active, void *context);
+
 static void ConfigureMKXP(MKXPSession *session) {
     NSFileManager *files = NSFileManager.defaultManager;
     NSString *sharedFonts = [NSString stringWithUTF8String:session->derivedRoot.c_str()];
@@ -361,6 +318,7 @@ static void ConfigureMKXP(MKXPSession *session) {
         mkxp_setDebugLogPath(logPath.fileSystemRepresentation);
     }
     mkxp_setDebugLogCallback(MKXPDebugLogMirror, session);
+    mkxp_setTextInputModeCallback(MKXPTextInputMode, session);
 }
 
 static int32_t MKXPPushPointer(MKXPSession *session, double x, double y,
@@ -441,7 +399,21 @@ static void MKXPInfo(const char *message, void *context) {
     detail += message != nullptr ? message : "<no detail>";
     AppendMKXPHostLog(session, detail.c_str());
     MKXPEmit(session, YUME_RUNTIME_EVENT_WARNING, detail.c_str());
-    mkxp_signalInfoDismissed();
+    NSString *copiedMessage = message != nullptr
+        ? ([NSString stringWithUTF8String:message] ?: @"<invalid text>") : @"";
+    YumeMKXPHostView *view = session != nullptr ? session->view : nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (view != nil) [view presentEngineInformation:copiedMessage];
+        else mkxp_signalInfoDismissed();
+    });
+}
+
+static void MKXPTextInputMode(int32_t active, void *context) {
+    auto *session = static_cast<MKXPSession *>(context);
+    YumeMKXPHostView *view = session != nullptr ? session->view : nil;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [view setTextInputActive:active != 0];
+    });
 }
 
 @implementation YumeMKXPHostView {
@@ -452,6 +424,8 @@ static void MKXPInfo(const char *message, void *context) {
     BOOL _loggedCPUFrame;
     std::atomic<bool> _cpuFramePending;
     CGSize _lastLoggedBounds;
+    UIAlertController *_informationAlert;
+    UITextField *_textInput;
 }
 
 - (instancetype)initWithSession:(MKXPSession *)session {
@@ -478,6 +452,19 @@ static void MKXPInfo(const char *message, void *context) {
         _frameView.hidden = YES;
         _frameView.layer.zPosition = 1;
         [self addSubview:_frameView];
+        _textInput = [[UITextField alloc] initWithFrame:CGRectMake(0, 0, 1, 1)];
+        _textInput.delegate = self;
+        _textInput.autocorrectionType = UITextAutocorrectionTypeNo;
+        _textInput.spellCheckingType = UITextSpellCheckingTypeNo;
+        _textInput.smartQuotesType = UITextSmartQuotesTypeNo;
+        _textInput.smartDashesType = UITextSmartDashesTypeNo;
+        _textInput.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
+        _textInput.textColor = UIColor.clearColor;
+        _textInput.tintColor = UIColor.clearColor;
+        _textInput.backgroundColor = UIColor.clearColor;
+        _textInput.alpha = 0.01;
+        _textInput.isAccessibilityElement = NO;
+        [self addSubview:_textInput];
         [self syncHostMetalLayer];
     }
     return self;
@@ -585,7 +572,8 @@ static void MKXPInfo(const char *message, void *context) {
 }
 
 - (void)startEngineIfAttached {
-    if (_sdlStarted || _session == nullptr || self.window == nil) return;
+    if (_sdlStarted || _session == nullptr || self.window == nil ||
+        !_session->running.load() || _session->stopRequested.load()) return;
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
     [self syncHostMetalLayer];
@@ -614,7 +602,24 @@ static void MKXPInfo(const char *message, void *context) {
     AppendMKXPHostLog(session, "engine.game-path-set.begin");
     mkxp_setGamePath(session->contentRoot.c_str());
     AppendMKXPHostLog(session, "engine.game-path-set.end");
+    session->launchScheduled.store(true);
     dispatch_async(dispatch_get_main_queue(), ^{
+        // Closing the player between attach and this queued launch must not
+        // boot SDL after the session has already reported stopped.
+        if (session->stopRequested.load()) {
+            session->mainReturned.store(true);
+            session->running.store(false);
+            [session->view detachSession];
+            if (!session->stoppedEventSent.exchange(true))
+                MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped-before-launch");
+            if (session->destroyRequested.load()) {
+                ReleaseMKXPClaimAfterFailedCreation();
+                session->view = nil;
+                delete session;
+            }
+            return;
+        }
+        session->mainEntered.store(true);
         AppendMKXPHostLog(session, "engine.main-enter");
         SDL_SetMainReady();
         AppendMKXPHostLog(session, ("engine.sdl-main.begin wasInit=" +
@@ -684,8 +689,85 @@ static void MKXPInfo(const char *message, void *context) {
     [self touchesEnded:touches withEvent:event];
 }
 
+- (UIViewController *)hostingViewController {
+    UIResponder *responder = self;
+    while ((responder = responder.nextResponder) != nil) {
+        if ([responder isKindOfClass:UIViewController.class])
+            return (UIViewController *)responder;
+    }
+    return nil;
+}
+
+- (void)presentEngineInformation:(NSString *)message {
+    if (_session == nullptr) {
+        mkxp_signalInfoDismissed();
+        return;
+    }
+    [_informationAlert dismissViewControllerAnimated:NO completion:nil];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Message"
+        message:message preferredStyle:UIAlertControllerStyleAlert];
+    __weak YumeMKXPHostView *weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK"
+        style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            YumeMKXPHostView *strongSelf = weakSelf;
+            if (strongSelf != nil) strongSelf->_informationAlert = nil;
+            mkxp_signalInfoDismissed();
+        }]];
+    UIViewController *presenter = [self hostingViewController];
+    while (presenter.presentedViewController != nil &&
+           !presenter.presentedViewController.isBeingDismissed)
+        presenter = presenter.presentedViewController;
+    if (presenter == nil || presenter.view.window == nil) {
+        AppendMKXPHostLog(_session, "engine.message host presenter unavailable");
+        mkxp_signalInfoDismissed();
+        return;
+    }
+    _informationAlert = alert;
+    [presenter presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)dismissEngineInformation {
+    [_informationAlert dismissViewControllerAnimated:NO completion:nil];
+    _informationAlert = nil;
+}
+
+- (void)setTextInputActive:(BOOL)active {
+    if (_session == nullptr) return;
+    if (active) {
+        [_textInput becomeFirstResponder];
+    } else {
+        [_textInput resignFirstResponder];
+        _textInput.text = @"";
+    }
+}
+
+- (BOOL)textField:(UITextField *)textField
+shouldChangeCharactersInRange:(NSRange)range
+replacementString:(NSString *)replacement {
+    if (_session == nullptr || !_session->running.load()) return NO;
+    if (replacement.length == 0 && range.length > 0) {
+        mkxp_injectKeyEvent(MKXP_SCANCODE_BACKSPACE, 1);
+        mkxp_injectKeyEvent(MKXP_SCANCODE_BACKSPACE, 0);
+    } else if (replacement.length > 0) {
+        mkxp_pushTextInput(replacement.UTF8String);
+    }
+    return NO;
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (_session != nullptr && _session->running.load()) {
+        mkxp_injectKeyEvent(MKXP_SCANCODE_RETURN, 1);
+        mkxp_injectKeyEvent(MKXP_SCANCODE_RETURN, 0);
+    }
+    return NO;
+}
+
 - (void)detachSession {
+    [self dismissEngineInformation];
+    [_textInput resignFirstResponder];
+    _textInput.delegate = nil;
     mkxp_setDebugLogCallback(nullptr, nullptr);
+    mkxp_setTextInputModeCallback(nullptr, nullptr);
     mkxp_setCPUFrameCallback(nullptr, nullptr);
     mkxp_setHostNativeLayer(nullptr);
     mkxp_setHostUIWindow(nullptr);
@@ -755,7 +837,7 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
         ReleaseMKXPClaimAfterFailedCreation();
         return -3;
     }
-    InstallMKXPCrashBreadcrumb(session);
+    AppendMKXPHostLog(session, "crash-handler=system-default shared-process-safe");
     *providerSession = session;
     return 0;
 }
@@ -847,10 +929,22 @@ static int32_t MKXPSendText(void *opaque, const char *text) {
 static int32_t MKXPStop(void *opaque) {
     auto *session = static_cast<MKXPSession *>(opaque);
     if (session == nullptr || !session->running.load()) return 0;
+    if (session->stopRequested.exchange(true)) return 0;
     AppendMKXPHostLog(session, ("lifecycle.stop-requested callbacks=" +
         std::to_string(session->cpuFrameCallbacks.load()) + " presented=" +
         std::to_string(session->cpuFramesPresented.load()) + " inputs=" +
         std::to_string(session->inputSequence.load())).c_str());
+    // A game-level information dialog blocks the RGSS thread until the host
+    // acknowledges it. Closing the player must release that wait first.
+    mkxp_signalInfoDismissed();
+    YumeMKXPHostView *view = session->view;
+    dispatch_async(dispatch_get_main_queue(), ^{ [view dismissEngineInformation]; });
+    if (!session->mainEntered.load()) {
+        session->running.store(false);
+        if (!session->stoppedEventSent.exchange(true))
+            MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped-before-launch");
+        return 0;
+    }
     mkxp_requestTerminate();
     return 0;
 }
@@ -870,12 +964,13 @@ static void MKXPDestroy(void *opaque) {
         session->logCallbackContext = nullptr;
     }
     mkxp_setDebugLogCallback(nullptr, nullptr);
+    mkxp_setTextInputModeCallback(nullptr, nullptr);
     session->destroyRequested.store(true);
     (void)MKXPStop(session);
-    if (session->mainReturned.load() || !session->running.load()) {
+    if (session->mainReturned.load() || !session->launchScheduled.load()) {
         [session->view detachSession];
         session->view = nil;
-        if (!session->everStarted.load()) ReleaseMKXPClaimAfterFailedCreation();
+        if (!session->mainEntered.load()) ReleaseMKXPClaimAfterFailedCreation();
         delete session;
     }
 }

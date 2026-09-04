@@ -27,6 +27,13 @@
 #include "Utils.h"
 #include "coding2utf16.h"
 
+#include <string>
+
+#if !defined(WIN32) && !defined(_WIN32) && !defined(MACOS9) && !defined(PSP) && !defined(__OS2__)
+#include <dirent.h>
+#include <strings.h>
+#endif
+
 #if defined(WEB)
 #include <emscripten.h>
 #endif
@@ -37,6 +44,66 @@ extern Coding2UTF16 *coding2utf16;
 #define STRING_BUFFER_LENGTH 4096
 
 #define SKIP_SPACE(p) while ( *(p) == ' ' || *(p) == '\t' ) (p)++
+
+namespace {
+
+FILE *openCaseInsensitiveForRead(const std::string &requested,
+                                 const char *mode)
+{
+    if (mode == NULL) return NULL;
+    FILE *fp = ::fopen(requested.c_str(), mode);
+    if (fp != NULL || mode[0] != 'r') return fp;
+
+#if !defined(WIN32) && !defined(_WIN32) && !defined(MACOS9) && !defined(PSP) && !defined(__OS2__)
+    std::string resolved;
+    size_t cursor = 0;
+    if (!requested.empty() && requested[0] == DELIMITER) {
+        resolved.assign(1, DELIMITER);
+        cursor = 1;
+    }
+
+    while (cursor <= requested.size()) {
+        const size_t delimiter = requested.find(DELIMITER, cursor);
+        const size_t end = delimiter == std::string::npos
+            ? requested.size() : delimiter;
+        const std::string component = requested.substr(cursor, end - cursor);
+        cursor = delimiter == std::string::npos
+            ? requested.size() + 1 : delimiter + 1;
+        if (component.empty() || component == ".") continue;
+
+        if (component == "..") {
+            if (!resolved.empty() && resolved.back() != DELIMITER)
+                resolved.push_back(DELIMITER);
+            resolved += component;
+            continue;
+        }
+
+        const std::string directory = resolved.empty() ? "." : resolved;
+        DIR *stream = opendir(directory.c_str());
+        if (stream == NULL) return NULL;
+
+        std::string actual;
+        struct dirent *entry = NULL;
+        while ((entry = readdir(stream)) != NULL) {
+            if (strcasecmp(component.c_str(), entry->d_name) == 0) {
+                actual = entry->d_name;
+                break;
+            }
+        }
+        closedir(stream);
+        if (actual.empty()) return NULL;
+        if (!resolved.empty() && resolved.back() != DELIMITER)
+            resolved.push_back(DELIMITER);
+        resolved += actual;
+    }
+
+    return resolved.empty() ? NULL : ::fopen(resolved.c_str(), mode);
+#else
+    return NULL;
+#endif
+}
+
+} // namespace
 
 ScriptHandler::ScriptHandler()
 {
@@ -152,17 +219,15 @@ void ScriptHandler::setSaveDir(const char *path)
 
 FILE *ScriptHandler::fopen( const char *path, const char *mode, bool use_save_dir )
 {
-    char filename[256];
-    if (use_save_dir && save_dir)
-        sprintf( filename, "%s%s", save_dir, path );
-    else
-        sprintf( filename, "%s%s", archive_path, path );
+    const char *base = use_save_dir && save_dir ? save_dir : archive_path;
+    std::string filename = base != NULL ? base : "";
+    filename += path != NULL ? path : "";
 
-    for ( unsigned int i=0 ; i<strlen( filename ) ; i++ )
-        if ( filename[i] == '/' || filename[i] == '\\' )
+    for (size_t i = 0; i < filename.size(); ++i)
+        if (filename[i] == '/' || filename[i] == '\\')
             filename[i] = DELIMITER;
 
-    return ::fopen( filename, mode );
+    return openCaseInsensitiveForRead(filename, mode);
 }
 
 void ScriptHandler::setKeyTable( const unsigned char *key_table )
@@ -1019,7 +1084,7 @@ int ScriptHandler::readScript( char *path )
     }
 
     if (fp == NULL){
-        utils::printError( "can't open any of 0.txt, 00.txt, nscript.dat and nscript.___\n");
+        utils::printError( "can't open an ONS script (0/00.txt, nscr_sec.dat, nscript.*, onscript.nt2/nt3)\n");
         return -1;
     }
     

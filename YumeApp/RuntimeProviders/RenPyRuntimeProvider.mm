@@ -1,11 +1,8 @@
-#define GLES_SILENCE_DEPRECATION 1
 #import <Foundation/Foundation.h>
-#import <OpenGLES/EAGL.h>
-#import <QuartzCore/CAEAGLLayer.h>
 #import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIKit.h>
-#import <objc/runtime.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -14,10 +11,10 @@
 #include <limits.h>
 #include <mutex>
 #include <new>
-#include <signal.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 #include <SDL.h>
 #include <SDL_syswm.h>
@@ -38,6 +35,12 @@ struct RenPySession;
 @end
 
 struct RenPySession {
+    struct EnvironmentEntry {
+        std::string key;
+        std::string value;
+        bool existed = false;
+    };
+
     std::string contentRoot;
     std::string saveRoot;
     std::string logRoot;
@@ -53,12 +56,26 @@ struct RenPySession {
     __strong YumeRenPyHostView *view = nil;
     std::atomic<bool> running{false};
     std::atomic<bool> everStarted{false};
+    std::atomic<bool> mainScheduled{false};
+    std::atomic<bool> mainEntered{false};
     std::atomic<bool> mainReturned{false};
+    std::atomic<bool> stopRequested{false};
+    // 0 = launcher setup, 1 = launcher_main committed, 2 = stop won before
+    // entry, 3 = launcher returned. This atomically hands SDL_QUIT ownership
+    // between stop and worker.
+    std::atomic<int> launchGate{0};
     std::atomic<bool> destroyRequested{false};
     std::atomic<bool> stoppedEventSent{false};
+    // 0 = not scheduled, 1 = worker active, 2 = worker finished,
+    // 3 = destroy waits for worker, 4 = deletion claimed.
+    std::atomic<int> workerLifecycle{0};
     std::atomic<uint64_t> inputSequence{0};
     std::mutex pythonLogMutex;
     uint64_t pythonLogOffset = 0;
+    std::vector<EnvironmentEntry> environment;
+    bool environmentConfigured = false;
+    int savedStdout = -1;
+    int savedStderr = -1;
 };
 
 static void AppendRenPyHostLog(RenPySession *session, const char *message) {
@@ -151,56 +168,6 @@ static void MirrorRenPyPythonLog(RenPySession *session) {
 
 static std::mutex gRenPyClaimMutex;
 static bool gRenPyClaimed = false;
-static volatile sig_atomic_t gRenPyCrashLogFD = -1;
-
-static void RenPyCrashSignalHandler(int signalNumber) {
-    const int fd = static_cast<int>(gRenPyCrashLogFD);
-    if (fd < 0) return;
-    static const char prefix[] = "native.crash signal=";
-    (void)write(fd, prefix, sizeof(prefix) - 1);
-    char number[16] = {};
-    unsigned int value = signalNumber < 0
-        ? static_cast<unsigned int>(-signalNumber)
-        : static_cast<unsigned int>(signalNumber);
-    int index = static_cast<int>(sizeof(number)) - 2;
-    do {
-        number[index--] = static_cast<char>('0' + value % 10u);
-        value /= 10u;
-    } while (value > 0 && index >= 0);
-    if (signalNumber < 0 && index >= 0) number[index--] = '-';
-    (void)write(fd, number + index + 1, sizeof(number) - index - 2);
-    (void)write(fd, "\n", 1);
-    (void)fsync(fd);
-}
-
-static void InstallRenPyCrashBreadcrumb(RenPySession *session) {
-    if (session == nullptr || session->logRoot.empty()) return;
-    @autoreleasepool {
-        NSString *root = [NSString stringWithUTF8String:session->logRoot.c_str()];
-        if (root.length == 0) return;
-        [[NSFileManager defaultManager] createDirectoryAtPath:root
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nil];
-        NSString *path = [root stringByAppendingPathComponent:@"renpy-crash.log"];
-        const int fd = open(path.fileSystemRepresentation,
-                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-        if (fd < 0) return;
-        const int previous = static_cast<int>(gRenPyCrashLogFD);
-        gRenPyCrashLogFD = fd;
-        if (previous >= 0) close(previous);
-        const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
-        for (const int signalNumber : signals) {
-            struct sigaction action {};
-            action.sa_handler = RenPyCrashSignalHandler;
-            sigemptyset(&action.sa_mask);
-            action.sa_flags = SA_RESETHAND;
-            (void)sigaction(signalNumber, &action, nullptr);
-        }
-    }
-    AppendRenPyHostLog(session, "crash-handler.install.end");
-}
-
 static void RedirectRenPyOutput(RenPySession *session) {
     if (session == nullptr || session->logRoot.empty()) return;
     @autoreleasepool {
@@ -216,17 +183,147 @@ static void RedirectRenPyOutput(RenPySession *session) {
         struct stat status {};
         if (fstat(fileno(stream), &status) == 0)
             session->pythonLogOffset = static_cast<uint64_t>(status.st_size);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        const int savedStdout = dup(STDOUT_FILENO);
+        const int savedStderr = dup(STDERR_FILENO);
+        if (savedStdout < 0 || savedStderr < 0) {
+            if (savedStdout >= 0) close(savedStdout);
+            if (savedStderr >= 0) close(savedStderr);
+            fclose(stream);
+            AppendRenPyHostLog(session, "output.redirect-save-failed");
+            return;
+        }
+        (void)fcntl(savedStdout, F_SETFD, FD_CLOEXEC);
+        (void)fcntl(savedStderr, F_SETFD, FD_CLOEXEC);
         const int fd = fileno(stream);
-        (void)dup2(fd, STDOUT_FILENO);
-        (void)dup2(fd, STDERR_FILENO);
-        setvbuf(stdout, nullptr, _IONBF, 0);
-        setvbuf(stderr, nullptr, _IONBF, 0);
+        if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
+            (void)dup2(savedStdout, STDOUT_FILENO);
+            (void)dup2(savedStderr, STDERR_FILENO);
+            close(savedStdout);
+            close(savedStderr);
+            fclose(stream);
+            AppendRenPyHostLog(session, "output.redirect-dup-failed");
+            return;
+        }
+        session->savedStdout = savedStdout;
+        session->savedStderr = savedStderr;
+        fclose(stream);
     }
+}
+
+static void RestoreRenPyOutput(RenPySession *session) {
+    if (session == nullptr) return;
+    std::fflush(stdout);
+    std::fflush(stderr);
+    if (session->savedStdout >= 0) {
+        (void)dup2(session->savedStdout, STDOUT_FILENO);
+        close(session->savedStdout);
+        session->savedStdout = -1;
+    }
+    if (session->savedStderr >= 0) {
+        (void)dup2(session->savedStderr, STDERR_FILENO);
+        close(session->savedStderr);
+        session->savedStderr = -1;
+    }
+}
+
+static void SetRenPyEnvironment(RenPySession *session, const char *key,
+                                const char *value) {
+    if (session == nullptr || key == nullptr || value == nullptr) return;
+    const char *previous = getenv(key);
+    session->environment.push_back({key, previous != nullptr ? previous : "",
+                                    previous != nullptr});
+    (void)setenv(key, value, 1);
+}
+
+static void RestoreRenPyEnvironment(RenPySession *session) {
+    if (session == nullptr || !session->environmentConfigured) return;
+    for (auto iterator = session->environment.rbegin();
+         iterator != session->environment.rend(); ++iterator) {
+        if (iterator->existed) {
+            (void)setenv(iterator->key.c_str(), iterator->value.c_str(), 1);
+        } else {
+            (void)unsetenv(iterator->key.c_str());
+        }
+    }
+    session->environment.clear();
+    session->environmentConfigured = false;
 }
 
 static void ReleaseRenPyClaim(void) {
     std::lock_guard<std::mutex> lock(gRenPyClaimMutex);
     gRenPyClaimed = false;
+}
+
+static void DetachRenPyViewOnMain(RenPySession *session) {
+    if (session == nullptr) return;
+    dispatch_block_t detach = ^{
+        [session->view detachSession];
+    };
+    if (NSThread.isMainThread) {
+        detach();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), detach);
+    }
+}
+
+static void DeleteRenPySession(RenPySession *session) {
+    if (session == nullptr) return;
+    RestoreRenPyOutput(session);
+    RestoreRenPyEnvironment(session);
+    dispatch_block_t detach = ^{
+        [session->view detachSession];
+        session->view = nil;
+    };
+    if (NSThread.isMainThread) {
+        detach();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), detach);
+    }
+    // The official launcher finalizes Python, but its statically linked
+    // extension modules are not guaranteed to survive a second initialize in
+    // the same process. Match Spark's process-isolated model: only a session
+    // that never entered launcher_main releases the in-process claim.
+    if (!session->mainEntered.load()) ReleaseRenPyClaim();
+    delete session;
+}
+
+static void FinishRenPyWorker(RenPySession *session) {
+    // This must be the worker's final operation on the session. A destroyer
+    // that observes state 2 may free it immediately after the transition.
+    session->mainReturned.store(true);
+    int expected = 1;
+    if (session->workerLifecycle.compare_exchange_strong(expected, 2)) return;
+    if (expected == 3) {
+        expected = 3;
+        if (session->workerLifecycle.compare_exchange_strong(expected, 4)) {
+            DeleteRenPySession(session);
+        }
+    }
+}
+
+static NSString *ExistingRenPyPath(NSString *root, NSString *relative) {
+    if (root.length == 0 || relative.length == 0) return nil;
+    NSString *current = root.stringByStandardizingPath;
+    for (NSString *component in [relative componentsSeparatedByString:@"/"]) {
+        if (component.length == 0 || [component isEqualToString:@"."]) continue;
+        NSString *candidate = [current stringByAppendingPathComponent:component];
+        if (![NSFileManager.defaultManager fileExistsAtPath:candidate]) {
+            NSString *match = nil;
+            for (NSString *child in [NSFileManager.defaultManager
+                    contentsOfDirectoryAtPath:current error:nil]) {
+                if ([child caseInsensitiveCompare:component] == NSOrderedSame) {
+                    match = child;
+                    break;
+                }
+            }
+            if (match == nil) return nil;
+            candidate = [current stringByAppendingPathComponent:match];
+        }
+        current = candidate;
+    }
+    return current;
 }
 
 static void RenPyEmit(RenPySession *session, YumeRuntimeEventKind kind,
@@ -236,6 +333,37 @@ static void RenPyEmit(RenPySession *session, YumeRuntimeEventKind kind,
     if (session->callback != nullptr) {
         session->callback(kind, code, session->callbackContext);
     }
+}
+
+static int RenPyGenerationFromVersionFile(NSString *path) {
+    NSData *data = path.length > 0 ? [NSData dataWithContentsOfFile:path] : nil;
+    if (data.length == 0) return -1;
+    const uint8_t *bytes = static_cast<const uint8_t *>(data.bytes);
+    if (data.length >= 4 && bytes[2] == 0x0d && bytes[3] == 0x0a) {
+        // Python 2.7 and Python 3 bytecode have unambiguous magic prefixes.
+        // Ren'Py 7 uses 03 f3 0d 0a; supported Ren'Py 8 releases use a
+        // Python 3 magic whose second byte is 0d.
+        if (bytes[0] == 0x03 && bytes[1] == 0xf3) return 0;
+        if (bytes[1] == 0x0d) return 1;
+    }
+    NSString *value = [[NSString alloc] initWithData:data
+                                             encoding:NSUTF8StringEncoding];
+    if (value == nil) return -1;
+    NSString *lower = value.lowercaseString;
+    if ([lower containsString:@"version = u'8."] ||
+        [lower containsString:@"version = u\"8."] ||
+        [lower containsString:@"version = '8."] ||
+        [lower containsString:@"version = \"8."] ||
+        [lower containsString:@"(8,"] ||
+        [lower containsString:@"version = 8"]) return 1;
+    if ([lower containsString:@"version = u'7."] ||
+        [lower containsString:@"version = u\"7."] ||
+        [lower containsString:@"version = '7."] ||
+        [lower containsString:@"version = \"7."] ||
+        [lower containsString:@"(6,"] || [lower containsString:@"(7,"] ||
+        [lower containsString:@"version = 6"] ||
+        [lower containsString:@"version = 7"]) return 0;
+    return -1;
 }
 
 static RenPyGeneration DetectRenPyGeneration(NSString *root) {
@@ -248,23 +376,31 @@ static RenPyGeneration DetectRenPyGeneration(NSString *root) {
             return RenPyGeneration::Legacy;
         }
     }
-    NSFileManager *files = NSFileManager.defaultManager;
     NSArray<NSString *> *versionFiles = @[
         @"game/script_version.txt", @"script_version.txt",
-        @"renpy/vc_version.py", @"game/renpy/vc_version.py"
+        @"renpy/vc_version.py", @"renpy/vc_version.pyc",
+        @"renpy/vc_version.pyo", @"game/renpy/vc_version.py",
+        @"game/renpy/vc_version.pyc", @"game/renpy/vc_version.pyo"
     ];
     for (NSString *relative in versionFiles) {
-        NSString *path = [root stringByAppendingPathComponent:relative];
-        NSString *value = [NSString stringWithContentsOfFile:path
-                                                   encoding:NSUTF8StringEncoding
-                                                      error:nil];
-        if (value.length == 0) continue;
-        if ([value containsString:@"(8,"] || [value containsString:@"version = 8"]) {
-            return RenPyGeneration::Modern;
-        }
-        if ([value containsString:@"(6,"] || [value containsString:@"(7,"] ||
-            [value containsString:@"version = 7"] || [value containsString:@"version = 6"]) {
-            return RenPyGeneration::Legacy;
+        NSString *path = ExistingRenPyPath(root, relative);
+        if (path == nil) continue;
+        const int detected = RenPyGenerationFromVersionFile(path);
+        if (detected == 1) return RenPyGeneration::Modern;
+        if (detected == 0) return RenPyGeneration::Legacy;
+    }
+    for (NSString *relative in @[@"renpy/__pycache__", @"game/renpy/__pycache__"]) {
+        NSString *directory = ExistingRenPyPath(root, relative);
+        if (directory.length == 0) continue;
+        for (NSString *name in [NSFileManager.defaultManager
+                contentsOfDirectoryAtPath:directory error:nil]) {
+            if (![name.lowercaseString hasPrefix:@"vc_version"] ||
+                [name.pathExtension caseInsensitiveCompare:@"pyc"] != NSOrderedSame)
+                continue;
+            const int detected = RenPyGenerationFromVersionFile(
+                [directory stringByAppendingPathComponent:name]);
+            if (detected == 1) return RenPyGeneration::Modern;
+            if (detected == 0) return RenPyGeneration::Legacy;
         }
     }
     NSArray<NSString *> *modernMarkers = @[
@@ -272,7 +408,7 @@ static RenPyGeneration DetectRenPyGeneration(NSString *root) {
         @"lib/python3.9", @"lib/python3.10", @"lib/python3.11", @"lib/python3.12"
     ];
     for (NSString *relative in modernMarkers) {
-        if ([files fileExistsAtPath:[root stringByAppendingPathComponent:relative]]) {
+        if (ExistingRenPyPath(root, relative) != nil) {
             return RenPyGeneration::Modern;
         }
     }
@@ -280,7 +416,7 @@ static RenPyGeneration DetectRenPyGeneration(NSString *root) {
         @"game/cache/bytecode-27.rpyb", @"lib/python2.7"
     ];
     for (NSString *relative in legacyMarkers) {
-        if ([files fileExistsAtPath:[root stringByAppendingPathComponent:relative]]) {
+        if (ExistingRenPyPath(root, relative) != nil) {
             return RenPyGeneration::Legacy;
         }
     }
@@ -302,64 +438,6 @@ extern "C" void *YumeGetHostUIWindow(void) {
 
 extern "C" void *YumeGetHostGameView(void) {
     return (__bridge void *)gYumeHostView;
-}
-
-static UIView *YumeViewOwningLayer(CALayer *layer) {
-    if (layer == nil) return nil;
-    id delegate = layer.delegate;
-    if ([delegate isKindOfClass:[UIView class]]) {
-        UIView *view = (UIView *)delegate;
-        if (view.layer == layer) return view;
-    }
-    return nil;
-}
-
-static void YumeAttachEAGLDrawableToHost(id drawable) {
-    if (drawable == nil || ![drawable isKindOfClass:[CALayer class]]) return;
-    CALayer *layer = (CALayer *)drawable;
-    UIView *host = (__bridge UIView *)YumeGetHostGameView();
-    if (host == nil || host.window == nil || CGRectIsEmpty(host.bounds)) return;
-    UIView *glView = YumeViewOwningLayer(layer);
-    if (glView == nil || glView == host) return;
-    if (glView.superview == host) {
-        glView.frame = host.bounds;
-        return;
-    }
-    glView.frame = host.bounds;
-    glView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
-                              UIViewAutoresizingFlexibleHeight;
-    [host insertSubview:glView atIndex:0];
-    [host layoutIfNeeded];
-    [host.window layoutIfNeeded];
-    std::fprintf(stdout, "yume.eagl-host-bound host=%p view=%p bounds=%.0fx%.0f\n",
-                 (__bridge void *)host, (__bridge void *)glView,
-                 host.bounds.size.width, host.bounds.size.height);
-    std::fflush(stdout);
-}
-
-static BOOL (*YumeEAGLRenderbufferStorageIMP)(id, SEL, GLenum, id);
-
-static BOOL YumeEAGLRenderbufferStorageHook(id self, SEL selector, GLenum target,
-                                            id drawable) {
-    YumeAttachEAGLDrawableToHost(drawable);
-    [CATransaction flush];
-    if (YumeEAGLRenderbufferStorageIMP == nullptr) return NO;
-    BOOL ok = YumeEAGLRenderbufferStorageIMP(self, selector, target, drawable);
-    std::fprintf(stdout, "yume.eagl-storage ok=%d\n", ok ? 1 : 0);
-    std::fflush(stdout);
-    return ok;
-}
-
-static void YumeInstallEAGLDrawableHook(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        Method method = class_getInstanceMethod(
-            [EAGLContext class], @selector(renderbufferStorage:fromDrawable:));
-        if (method == nullptr) return;
-        YumeEAGLRenderbufferStorageIMP =
-            (BOOL (*)(id, SEL, GLenum, id))method_getImplementation(method);
-        method_setImplementation(method, (IMP)YumeEAGLRenderbufferStorageHook);
-    });
 }
 
 static UIWindow *FindSDLUIKitWindow(void) {
@@ -403,7 +481,9 @@ static UIWindow *FindSDLUIKitWindow(void) {
 }
 
 - (void)startEngineIfAttached {
-    if (_sdlStarted || _session == nullptr || self.window == nil) return;
+    if (_sdlStarted || _session == nullptr || self.window == nil ||
+        !_session->running.load() || _session->stopRequested.load() ||
+        _session->destroyRequested.load()) return;
     if (CGRectIsEmpty(self.bounds)) return;
     _sdlStarted = YES;
     gYumeHostWindow = self.window;
@@ -419,80 +499,120 @@ static UIWindow *FindSDLUIKitWindow(void) {
     AppendRenPyHostLog(_session, viewLine);
     RenPySession *session = _session;
     std::string executable = session->launcherPath;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        AppendRenPyHostLog(session, ("engine.sdl-main.begin wasInit=" +
-            std::to_string(SDL_WasInit(0)) + " videoDriver=" +
-            std::string(SDL_GetCurrentVideoDriver() ?: "<none>")).c_str());
-        // Never chdir into the imported game. Windows/mac exports ship
-        // lib/python2.7/iosupport.py that uses pyobjus against macOS
-        // Foundation paths and abort on iOS.
-        char previousWorkingDirectory[PATH_MAX] = {};
-        const bool capturedWorkingDirectory =
-            getcwd(previousWorkingDirectory, sizeof(previousWorkingDirectory)) != nullptr;
-        if (!session->runtimeBasePath.empty()) {
-            (void)chdir(session->runtimeBasePath.c_str());
-            AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
-        }
-        // LiveContainer cannot create EAGL drawables. Do not force GLES;
-        // Ren'Py is launched with RENPY_RENDERER=sw.
-        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
-        SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
-        SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
-        SDL_SetMainReady();
-        std::string executableArgument = executable;
-        std::string gameRoot = session->contentRoot;
-        AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
-        AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
-        std::fprintf(stdout, "yume.python-redirect-ready argv0=%s basedir=%s\n",
-                     executableArgument.c_str(), gameRoot.c_str());
-        std::fflush(stdout);
-        std::fflush(stderr);
-        // Official launcher_main preinitializes isolated Python from this
-        // argv. A "--basedir" flag is treated as an unknown interpreter
-        // option and exits 1 with no traceback. Ren'Py accepts the game
-        // root as a positional basedir after it injects main.py.
-        // Ren'Py's iOS renderer list normally contains GLES only. LiveContainer
-        // cannot provide the extra EAGL drawable, so safe mode is placed after
-        // the positional basedir and makes Interface select the bundled
-        // software renderer without confusing launcher_main's Python options.
-        char safeMode[] = "--safe-mode";
-        char *arguments[] = {
-            executableArgument.data(),
-            gameRoot.data(),
-            safeMode,
-            nullptr
-        };
-        // launcher_main is normally wrapped by SDL_RunApp, which enables the
-        // UIKit event pump before entering Python. Yume is already inside the
-        // host UIApplication, so reproduce that part without starting a
-        // second UIApplicationMain.
-        SDL_iPhoneSetEventPump(SDL_TRUE);
-        const CFTimeInterval startedAt = CACurrentMediaTime();
-        int result = session->generation == RenPyGeneration::Modern
-            ? yume_renpy_modern_main(3, arguments)
-            : yume_renpy_legacy_main(3, arguments);
-        SDL_iPhoneSetEventPump(SDL_FALSE);
-        if (capturedWorkingDirectory) {
-            (void)chdir(previousWorkingDirectory);
-            AppendRenPyHostLog(session, "engine.cwd-restored");
-        }
-        MirrorRenPyPythonLog(session);
-        std::string resultLine = "engine.main-returned result=" + std::to_string(result) +
-            " elapsed=" + std::to_string(CACurrentMediaTime() - startedAt) +
-            " wasInit=" + std::to_string(SDL_WasInit(0)) + " videoDriver=" +
-            std::string(SDL_GetCurrentVideoDriver() ?: "<none>") + " sdlError=" +
-            std::string(SDL_GetError() ?: "<none>");
-        AppendRenPyHostLog(session, resultLine.c_str());
-        session->mainReturned.store(true);
-        session->running.store(false);
-        [session->view detachSession];
-        if (result != 0) RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.engine-error");
-        if (!session->stoppedEventSent.exchange(true)) {
-            RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED, "renpy.stopped");
-        }
-        if (session->destroyRequested.load()) {
-            session->view = nil;
-            delete session;
+    int idleWorker = 0;
+    if (!session->workerLifecycle.compare_exchange_strong(idleWorker, 1)) return;
+    session->mainScheduled.store(true);
+    // Spark launches launcher_main on a global worker queue. Python/SDL owns
+    // this thread until the game exits; running it on UIKit's main queue would
+    // freeze view embedding, controls, lifecycle delivery, and the watchdog.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        @autoreleasepool {
+            if (session->stopRequested.load()) {
+                RestoreRenPyOutput(session);
+                RestoreRenPyEnvironment(session);
+                session->running.store(false);
+                DetachRenPyViewOnMain(session);
+                if (!session->stoppedEventSent.exchange(true))
+                    RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED,
+                              "renpy.stopped-before-launch");
+                FinishRenPyWorker(session);
+                return;
+            }
+            AppendRenPyHostLog(session, ("engine.sdl-main.begin wasInit=" +
+                std::to_string(SDL_WasInit(0)) + " videoDriver=" +
+                std::string(SDL_GetCurrentVideoDriver() ?: "<none>")).c_str());
+            // Never chdir into the imported game. Windows/mac exports ship
+            // lib/python2.7/iosupport.py that uses pyobjus against macOS
+            // Foundation paths and abort on iOS.
+            char previousWorkingDirectory[PATH_MAX] = {};
+            const bool capturedWorkingDirectory =
+                getcwd(previousWorkingDirectory, sizeof(previousWorkingDirectory)) != nullptr;
+            if (!session->runtimeBasePath.empty()) {
+                (void)chdir(session->runtimeBasePath.c_str());
+                AppendRenPyHostLog(session, ("engine.chdir=" + session->runtimeBasePath).c_str());
+            }
+            // Spark and the official iOS runtime render through MetalANGLE. Do not
+            // force SDL's software renderer: neither embedded Ren'Py generation
+            // exposes "sw" as a valid RENPY_RENDERER value.
+            SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+            SDL_SetMainReady();
+            std::string executableArgument = executable;
+            std::string gameRoot = session->contentRoot;
+            AppendRenPyHostLog(session, ("engine.basedir=" + gameRoot).c_str());
+            AppendRenPyHostLog(session, ("engine.argv0=" + executableArgument).c_str());
+            RedirectRenPyOutput(session);
+            std::fprintf(stdout, "yume.python-redirect-ready argv0=%s basedir=%s\n",
+                         executableArgument.c_str(), gameRoot.c_str());
+            std::fflush(stdout);
+            std::fflush(stderr);
+            // Official launcher_main preinitializes isolated Python from this
+            // argv. A "--basedir" flag is treated as an unknown interpreter
+            // option and exits 1 with no traceback. Ren'Py accepts the game
+            // root as a positional basedir after it injects main.py.
+            char *arguments[] = {
+                executableArgument.data(),
+                gameRoot.data(),
+                nullptr
+            };
+            // launcher_main is normally wrapped by SDL_RunApp, which enables the
+            // UIKit event pump before entering Python. Yume is already inside the
+            // host UIApplication, so reproduce that part without starting a
+            // second UIApplicationMain.
+            SDL_iPhoneSetEventPump(SDL_TRUE);
+            // Atomically close the hand-off race with RenPyStop. If stop wins
+            // the gate, no SDL_QUIT is left in the process-wide queue. If this
+            // worker wins, stop observes state 1 and delivers SDL_QUIT while
+            // launcher_main owns the event loop.
+            int preparing = 0;
+            if (!session->launchGate.compare_exchange_strong(preparing, 1)) {
+                SDL_iPhoneSetEventPump(SDL_FALSE);
+                if (capturedWorkingDirectory) (void)chdir(previousWorkingDirectory);
+                RestoreRenPyOutput(session);
+                MirrorRenPyPythonLog(session);
+                RestoreRenPyEnvironment(session);
+                session->running.store(false);
+                DetachRenPyViewOnMain(session);
+                if (!session->stoppedEventSent.exchange(true))
+                    RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED,
+                              "renpy.stopped-before-launch");
+                FinishRenPyWorker(session);
+                return;
+            }
+            session->mainEntered.store(true);
+            const CFTimeInterval startedAt = CACurrentMediaTime();
+            int result = session->generation == RenPyGeneration::Modern
+                ? yume_renpy_modern_main(2, arguments)
+                : yume_renpy_legacy_main(2, arguments);
+            // Stop can race the instant launcher_main returns while `running`
+            // is still true for cleanup. Publish state 3 first, then remove a
+            // QUIT that may have been delivered by a stopper which observed
+            // state 1 immediately before this store. NativeRuntimeSession
+            // serializes native engines, so no other provider owns SDL here.
+            session->launchGate.store(3);
+            session->mainReturned.store(true);
+            SDL_FlushEvent(SDL_QUIT);
+            SDL_iPhoneSetEventPump(SDL_FALSE);
+            if (capturedWorkingDirectory) {
+                (void)chdir(previousWorkingDirectory);
+                AppendRenPyHostLog(session, "engine.cwd-restored");
+            }
+            RestoreRenPyOutput(session);
+            MirrorRenPyPythonLog(session);
+            RestoreRenPyEnvironment(session);
+            std::string resultLine = "engine.main-returned result=" + std::to_string(result) +
+                " elapsed=" + std::to_string(CACurrentMediaTime() - startedAt) +
+                " wasInit=" + std::to_string(SDL_WasInit(0)) + " videoDriver=" +
+                std::string(SDL_GetCurrentVideoDriver() ?: "<none>") + " sdlError=" +
+                std::string(SDL_GetError() ?: "<none>");
+            AppendRenPyHostLog(session, resultLine.c_str());
+            session->running.store(false);
+            DetachRenPyViewOnMain(session);
+            if (result != 0)
+                RenPyEmit(session, YUME_RUNTIME_EVENT_FAILED, "renpy.engine-error");
+            if (!session->stoppedEventSent.exchange(true)) {
+                RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED, "renpy.stopped");
+            }
+            FinishRenPyWorker(session);
         }
     });
 }
@@ -674,17 +794,21 @@ static int32_t RenPyStart(void *opaque) {
         return -3;
     }
 
-    setenv("RENPY_PATH_TO_SAVES", session->saveRoot.c_str(), 1);
-    setenv("RENPY_LOGDIR", session->logRoot.c_str(), 1);
-    setenv("RENPY_SEARCHPATH", session->contentRoot.c_str(), 1);
-    setenv("YUME_RENPY_GAMEDIR", session->contentRoot.c_str(), 1);
-    setenv("RENPY_LOG_TO_STDOUT", "1", 1);
-    // LiveContainer does not give EAGL backing to extra SDL windows.
-    // Prefer Ren'Py's software renderer; GLES still tries the host
-    // CAEAGLLayer if the game forces gl/gles.
-    setenv("RENPY_RENDERER", "sw", 1);
-    setenv("PYTHONHOME", base.UTF8String ?: "", 1);
-    AppendRenPyHostLog(session, "start.renderer=sw safe-mode=1");
+    SetRenPyEnvironment(session, "RENPY_PATH_TO_SAVES", session->saveRoot.c_str());
+    SetRenPyEnvironment(session, "RENPY_LOGDIR", session->logRoot.c_str());
+    SetRenPyEnvironment(session, "RENPY_SEARCHPATH", session->contentRoot.c_str());
+    SetRenPyEnvironment(session, "YUME_RENPY_GAMEDIR", session->contentRoot.c_str());
+    SetRenPyEnvironment(session, "RENPY_LOG_TO_STDOUT", "1");
+    // These are the MetalANGLE renderer identifiers exported by the staged
+    // iOS runtimes. Modern Ren'Py exposes "angle"; the legacy runtime also
+    // exposes the ANGLE2 path used for its newer GL2 interface.
+    const char *renderer = session->generation == RenPyGeneration::Modern
+        ? "angle" : "angle2";
+    SetRenPyEnvironment(session, "RENPY_RENDERER", renderer);
+    SetRenPyEnvironment(session, "PYTHONHOME", base.UTF8String ?: "");
+    session->environmentConfigured = true;
+    AppendRenPyHostLog(session, ("start.renderer=" + std::string(renderer) +
+        " safe-mode=0").c_str());
     AppendRenPyHostLog(session, ("start.main=" + std::string(mainScript.UTF8String ?: "")).c_str());
     AppendRenPyHostLog(session, ("start.site=" + std::string(siteModule.UTF8String ?: "")).c_str());
     AppendRenPyHostLog(session, ("start.environment PYTHONHOME=" +
@@ -692,8 +816,7 @@ static int32_t RenPyStart(void *opaque) {
         std::string(getenv("RENPY_SEARCHPATH") ?: "") + " RENPY_LOGDIR=" +
         std::string(getenv("RENPY_LOGDIR") ?: "") + " saves=" +
         std::string(getenv("RENPY_PATH_TO_SAVES") ?: "")).c_str());
-    InstallRenPyCrashBreadcrumb(session);
-    RedirectRenPyOutput(session);
+    AppendRenPyHostLog(session, "crash-handler=system-default shared-process-safe");
     AppendRenPyHostLog(session, "start.environment-configured");
     session->everStarted.store(true);
     // chdir to the generation root (the directory that contains base/),
@@ -815,10 +938,28 @@ static int32_t RenPySendPointer(void *opaque, double x, double y, int32_t presse
 static int32_t RenPySendText(void *opaque, const char *text) {
     auto *session = static_cast<RenPySession *>(opaque);
     if (session == nullptr || !session->running.load() || text == nullptr) return -1;
-    SDL_Event event{};
-    event.text.type = SDL_TEXTINPUT;
-    std::strncpy(event.text.text, text, sizeof(event.text.text) - 1);
-    const int result = SDL_PushEvent(&event);
+    const std::string bytes(text);
+    size_t cursor = 0;
+    int result = 1;
+    while (cursor < bytes.size()) {
+        constexpr size_t kTextCapacity =
+            sizeof(((SDL_TextInputEvent *)nullptr)->text);
+        size_t end = std::min(cursor + kTextCapacity - 1,
+                              bytes.size());
+        if (end < bytes.size()) {
+            while (end > cursor &&
+                   (static_cast<unsigned char>(bytes[end]) & 0xc0u) == 0x80u)
+                --end;
+        }
+        if (end == cursor) return -2;
+        SDL_Event event{};
+        event.text.type = SDL_TEXTINPUT;
+        std::memcpy(event.text.text, bytes.data() + cursor, end - cursor);
+        event.text.text[end - cursor] = '\0';
+        result = SDL_PushEvent(&event);
+        if (result < 0) break;
+        cursor = end;
+    }
     AppendRenPyHostLog(session, ("input.text sequence=" +
         std::to_string(session->inputSequence.fetch_add(1) + 1) + " bytes=" +
         std::to_string(std::strlen(text)) + " pushResult=" +
@@ -827,11 +968,31 @@ static int32_t RenPySendText(void *opaque, const char *text) {
 }
 static int32_t RenPyStop(void *opaque) {
     auto *session = static_cast<RenPySession *>(opaque);
-    if (session != nullptr && session->running.load()) {
+    if (session != nullptr && session->running.load() &&
+        !session->stopRequested.exchange(true)) {
         AppendRenPyHostLog(session, ("lifecycle.stop-requested inputs=" +
             std::to_string(session->inputSequence.load()) + " mainReturned=" +
             std::to_string(session->mainReturned.load())).c_str());
-        PushSimpleEvent(SDL_QUIT);
+        int preparing = 0;
+        if (session->launchGate.compare_exchange_strong(preparing, 2)) {
+            if (session->workerLifecycle.load() == 0) {
+                // No launcher worker can still consume process-wide
+                // environment or output state, so this unscheduled session
+                // may stop inline.
+                session->running.store(false);
+                RestoreRenPyOutput(session);
+                RestoreRenPyEnvironment(session);
+                if (!session->stoppedEventSent.exchange(true)) {
+                    RenPyEmit(session, YUME_RUNTIME_EVENT_STOPPED,
+                              "renpy.stopped-before-launch");
+                }
+            } else {
+                AppendRenPyHostLog(session,
+                                   "lifecycle.stop-deferred-to-worker");
+            }
+        } else if (preparing == 1) {
+            PushSimpleEvent(SDL_QUIT);
+        }
     }
     return 0;
 }
@@ -852,11 +1013,27 @@ static void RenPyDestroy(void *opaque) {
     }
     session->destroyRequested.store(true);
     (void)RenPyStop(session);
-    if (session->mainReturned.load() || !session->running.load()) {
-        [session->view detachSession];
-        session->view = nil;
-        if (!session->everStarted.load()) ReleaseRenPyClaim();
-        delete session;
+    for (;;) {
+        int state = session->workerLifecycle.load();
+        if (state == 0) {
+            if (session->workerLifecycle.compare_exchange_weak(state, 4)) {
+                DeleteRenPySession(session);
+                return;
+            }
+            continue;
+        }
+        if (state == 1) {
+            if (session->workerLifecycle.compare_exchange_weak(state, 3)) return;
+            continue;
+        }
+        if (state == 2) {
+            if (session->workerLifecycle.compare_exchange_weak(state, 4)) {
+                DeleteRenPySession(session);
+                return;
+            }
+            continue;
+        }
+        return;
     }
 }
 

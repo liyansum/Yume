@@ -46,6 +46,52 @@ final class DirectoryGameImportIntegrationTests: XCTestCase {
         XCTAssertTrue(taskIDs.isEmpty)
     }
 
+    func testWebContentLocationPreservesWindowsStyleEntryPointCasing() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        try fixture.write("<!doctype html>", to: "WWW/Index.HTML")
+        try fixture.write("// self-authored test runtime marker", to: "WWW/JS/RMMZ_CORE.JS")
+        try fixture.write("{\"gameTitle\":\"Fixture\"}", to: "WWW/Data/System.JSON")
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+
+        let imported = try await service.importDirectory(at: fixture.sourceRoot)
+        let location = try await storage.contentLocation(for: imported.id)
+
+        XCTAssertEqual(imported.engine.id.rawValue, "rpg-maker-mz")
+        XCTAssertEqual(location.rootURL.lastPathComponent, "WWW")
+        XCTAssertEqual(location.webEntryPoint?.rawValue, "Index.HTML")
+    }
+
+    func testFlashContentLocationDoesNotRebaseIntoUnrelatedWWWDirectory() async throws {
+        let fixture = try ImportFixture()
+        defer { fixture.remove() }
+        try fixture.write("<!doctype html>", to: "WWW/Index.HTML")
+        try fixture.write("FWS\u{9}\0\0\0", to: "WWW/Movie.SWF")
+        let storage = makeStorage(for: fixture)
+        let service = DirectoryGameImportService(
+            storage: storage,
+            detectors: BuiltInGameDetectors.registry
+        )
+
+        let imported = try await service.importDirectory(at: fixture.sourceRoot)
+        let location = try await storage.contentLocation(for: imported.id)
+
+        XCTAssertEqual(imported.engine.id.rawValue, "flash")
+        XCTAssertEqual(location.rootURL.lastPathComponent, "original")
+        XCTAssertEqual(location.runtimeEntryPoint?.rawValue, "WWW/Movie.SWF")
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: location.rootURL
+                    .appendingPathComponent(location.runtimeEntryPoint!.rawValue)
+                    .path
+            )
+        )
+    }
+
     func testPackagedRPGMakerVXAceFolderImportsWithoutExtractedDataDirectory() async throws {
         let fixture = try ImportFixture()
         defer { fixture.remove() }

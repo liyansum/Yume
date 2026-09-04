@@ -13,6 +13,7 @@
 #include <engine_api.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -402,13 +403,316 @@ bool HasScriptMarker(const fs::path &root) {
         "nscript.dat", "onscript.nt2", "onscript.nt3",
     };
     std::error_code error;
-    for (const char *marker : kMarkers) {
-        if (fs::is_regular_file(root / marker, error)) {
-            return true;
+    for (const fs::directory_entry &entry : fs::directory_iterator(root, error)) {
+        if (error) break;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        std::string name = entry.path().filename().string();
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char byte) {
+                           return static_cast<char>(std::tolower(byte));
+                       });
+        for (const char *marker : kMarkers) {
+            if (name == marker) return true;
+        }
+    }
+    return false;
+}
+
+fs::path FindRootFileCaseInsensitive(const fs::path &root,
+                                     const std::string &requested_name) {
+    std::string requested = requested_name;
+    std::transform(requested.begin(), requested.end(), requested.begin(),
+                   [](unsigned char byte) {
+                       return static_cast<char>(std::tolower(byte));
+                   });
+    std::error_code error;
+    for (const fs::directory_entry &entry : fs::directory_iterator(root, error)) {
+        if (error) break;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        std::string name = entry.path().filename().string();
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char byte) {
+                           return static_cast<char>(std::tolower(byte));
+                       });
+        if (name == requested) return entry.path();
+    }
+    return {};
+}
+
+fs::path FindONSKeyExecutable(const fs::path &root) {
+    struct Candidate {
+        fs::path path;
+        uintmax_t size = 0;
+        bool helper = false;
+    };
+    std::vector<Candidate> candidates;
+    std::error_code error;
+    for (const fs::directory_entry &entry : fs::directory_iterator(root, error)) {
+        if (error) break;
+        if (!entry.is_regular_file(error)) {
+            error.clear();
+            continue;
+        }
+        std::string extension = entry.path().extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char byte) {
+                           return static_cast<char>(std::tolower(byte));
+                       });
+        if (extension != ".exe") continue;
+        std::string name = entry.path().filename().string();
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char byte) {
+                           return static_cast<char>(std::tolower(byte));
+                       });
+        const bool helper = name.find("config") != std::string::npos ||
+            name.find("setup") != std::string::npos ||
+            name.find("unins") != std::string::npos;
+        const uintmax_t size = entry.file_size(error);
+        if (error) {
+            error.clear();
+            continue;
+        }
+        candidates.push_back({entry.path(), size, helper});
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate &left, const Candidate &right) {
+                  if (left.helper != right.helper) return !left.helper;
+                  if (left.size != right.size) return left.size > right.size;
+                  return left.path.filename().string() < right.path.filename().string();
+              });
+    return candidates.empty() ? fs::path() : candidates.front().path;
+}
+
+fs::path FindScriptForEncodingDetection(const fs::path &root,
+                                        int *encryption_mode) {
+    struct Marker {
+        const char *name;
+        int mode;
+    };
+    static constexpr Marker kMarkers[] = {
+        {"0.txt", 0}, {"00.txt", 0}, {"nscr_sec.dat", 2},
+        {"nscript.___", 3}, {"nscript.dat", 1},
+        {"onscript.nt2", 4}, {"onscript.nt3", 5},
+    };
+    std::error_code error;
+    for (const Marker &marker : kMarkers) {
+        for (const fs::directory_entry &entry :
+             fs::directory_iterator(root, error)) {
+            if (error) break;
+            std::string name = entry.path().filename().string();
+            std::transform(name.begin(), name.end(), name.begin(),
+                           [](unsigned char byte) {
+                               return static_cast<char>(std::tolower(byte));
+                           });
+            if (name == marker.name && entry.is_regular_file(error)) {
+                if (encryption_mode != nullptr) {
+                    *encryption_mode = marker.mode;
+                }
+                return entry.path();
+            }
+            error.clear();
         }
         error.clear();
     }
+    return {};
+}
+
+bool LoadONSKeyTable(const fs::path &executable,
+                     std::array<uint8_t, 256> *key_table) {
+    if (executable.empty() || key_table == nullptr) return false;
+    std::ifstream stream(executable, std::ios::binary);
+    if (!stream) return false;
+
+    // NScripter's key is the first 256-byte window whose values are all
+    // unique. The table maps each byte in that permutation back to its
+    // position. Keep only the suffix following the most recent duplicate,
+    // which is equivalent to upstream's circular-buffer search.
+    std::deque<uint8_t> unique_window;
+    std::array<bool, 256> present{};
+    char raw = 0;
+    while (stream.get(raw)) {
+        const uint8_t byte = static_cast<uint8_t>(raw);
+        if (present[byte]) {
+            while (!unique_window.empty()) {
+                const uint8_t removed = unique_window.front();
+                unique_window.pop_front();
+                present[removed] = false;
+                if (removed == byte) break;
+            }
+        }
+        unique_window.push_back(byte);
+        present[byte] = true;
+        if (unique_window.size() == key_table->size()) {
+            uint16_t position = 0;
+            for (const uint8_t value : unique_window) {
+                (*key_table)[value] = static_cast<uint8_t>(position++);
+            }
+            return true;
+        }
+    }
     return false;
+}
+
+bool IsValidUTF8(const std::vector<uint8_t> &bytes, bool *has_non_ascii) {
+    bool non_ascii = false;
+    for (size_t index = 0; index < bytes.size();) {
+        const uint8_t first = bytes[index++];
+        if (first < 0x80) continue;
+        non_ascii = true;
+        size_t continuation_count = 0;
+        uint32_t scalar = 0;
+        if ((first & 0xe0) == 0xc0) {
+            continuation_count = 1;
+            scalar = first & 0x1f;
+        } else if ((first & 0xf0) == 0xe0) {
+            continuation_count = 2;
+            scalar = first & 0x0f;
+        } else if ((first & 0xf8) == 0xf0) {
+            continuation_count = 3;
+            scalar = first & 0x07;
+        } else {
+            return false;
+        }
+        if (index + continuation_count > bytes.size()) return false;
+        for (size_t offset = 0; offset < continuation_count; ++offset) {
+            const uint8_t continuation = bytes[index++];
+            if ((continuation & 0xc0) != 0x80) return false;
+            scalar = (scalar << 6) | (continuation & 0x3f);
+        }
+        if ((continuation_count == 1 && scalar < 0x80) ||
+            (continuation_count == 2 && scalar < 0x800) ||
+            (continuation_count == 3 && scalar < 0x10000) ||
+            scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff)) {
+            return false;
+        }
+    }
+    if (has_non_ascii != nullptr) *has_non_ascii = non_ascii;
+    return true;
+}
+
+std::string DetectScriptEncoding(const fs::path &root) {
+    int encryption_mode = 0;
+    const fs::path script = FindScriptForEncodingDetection(
+        root, &encryption_mode);
+    std::ifstream stream(script, std::ios::binary);
+    if (script.empty() || !stream) return "gbk";
+
+    std::array<uint8_t, 256> key_table{};
+    if (encryption_mode == 3 &&
+        !LoadONSKeyTable(FindONSKeyExecutable(root), &key_table)) {
+        // nscript.___ is most commonly produced by the original Japanese
+        // NScripter toolchain. If its EXE/key cannot be inspected, SJIS is a
+        // safer fallback than interpreting undeciphered bytes as GBK.
+        return "sjis";
+    }
+
+    uint32_t nt3_key = 0;
+    uint64_t nt3_payload_size = 0;
+    if (encryption_mode == 5) {
+        stream.seekg(0, std::ios::end);
+        const std::streamoff total_size = stream.tellg();
+        if (total_size <= 0x920) return "gbk";
+        stream.seekg(0x91c, std::ios::beg);
+        std::array<uint8_t, 4> key_bytes{};
+        stream.read(reinterpret_cast<char *>(key_bytes.data()),
+                    static_cast<std::streamsize>(key_bytes.size()));
+        if (stream.gcount() != static_cast<std::streamsize>(key_bytes.size())) {
+            return "gbk";
+        }
+        nt3_key = static_cast<uint32_t>(key_bytes[0]) |
+            (static_cast<uint32_t>(key_bytes[1]) << 8u) |
+            (static_cast<uint32_t>(key_bytes[2]) << 16u) |
+            (static_cast<uint32_t>(key_bytes[3]) << 24u);
+        nt3_payload_size = static_cast<uint64_t>(total_size - 0x920);
+        stream.clear();
+        stream.seekg(0x920, std::ios::beg);
+    }
+
+    constexpr size_t kSampleLimit = 128u * 1024u;
+    std::vector<uint8_t> bytes;
+    bytes.reserve(kSampleLimit);
+    char value = 0;
+    size_t index = 0;
+    static constexpr uint8_t kSecureMagic[] = {
+        0x79, 0x57, 0x0d, 0x80, 0x04,
+    };
+    while (bytes.size() < kSampleLimit && stream.get(value)) {
+        uint8_t byte = static_cast<uint8_t>(value);
+        if (encryption_mode == 1) {
+            byte ^= 0x84;
+        } else if (encryption_mode == 2) {
+            byte ^= kSecureMagic[index % 5u];
+        } else if (encryption_mode == 3) {
+            byte = static_cast<uint8_t>(key_table[byte] ^ 0x84u);
+        } else if (encryption_mode == 4) {
+            byte ^= (0x85 & 0x97);
+            byte = static_cast<uint8_t>(byte - 1u);
+        } else if (encryption_mode == 5) {
+            const uint64_t position = index + 1u;
+            const uint8_t encrypted = byte;
+            nt3_key ^= encrypted;
+            nt3_key += static_cast<uint32_t>(
+                static_cast<uint64_t>(encrypted) *
+                    (nt3_payload_size + 1u - position) +
+                0x5d588b65u);
+            byte = static_cast<uint8_t>(encrypted ^ nt3_key);
+        }
+        bytes.push_back(byte);
+        ++index;
+    }
+    if (bytes.size() >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb &&
+        bytes[2] == 0xbf) {
+        return "utf8";
+    }
+    bool has_non_ascii = false;
+    if (IsValidUTF8(bytes, &has_non_ascii) && has_non_ascii) return "utf8";
+
+    size_t sjis_evidence = 0;
+    size_t gbk_evidence = 0;
+    size_t half_width_run = 0;
+    for (size_t offset = 0; offset < bytes.size();) {
+        const uint8_t first = bytes[offset];
+        if (first < 0x80) {
+            half_width_run = 0;
+            ++offset;
+            continue;
+        }
+        if (((first >= 0x81 && first <= 0x9f) ||
+             (first >= 0xe0 && first <= 0xef)) &&
+            offset + 1 < bytes.size()) {
+            const uint8_t second = bytes[offset + 1];
+            if ((second >= 0x40 && second <= 0x7e) ||
+                (second >= 0x80 && second <= 0xfc)) {
+                sjis_evidence += first == 0x82 ? 5u :
+                    (first == 0x83 ? 4u : 2u);
+            }
+        }
+        if (first >= 0xa1 && first <= 0xdf) {
+            ++half_width_run;
+        } else {
+            half_width_run = 0;
+        }
+        if (half_width_run > 2) gbk_evidence += 2;
+
+        if (first >= 0x81 && first <= 0xfe &&
+            offset + 1 < bytes.size()) {
+            const uint8_t second = bytes[offset + 1];
+            if ((second >= 0x40 && second <= 0x7e) ||
+                (second >= 0x80 && second <= 0xfe)) {
+                if (first >= 0xa1) gbk_evidence += 3;
+                offset += 2;
+                continue;
+            }
+        }
+        ++offset;
+    }
+    return sjis_evidence > gbk_evidence ? "sjis" : "gbk";
 }
 
 struct PresentationAspectRatio {
@@ -609,6 +913,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     std::string game_root;
     std::string default_font;
     std::string encoding = "gbk";
+    std::string configured_encoding;
     std::string error;
     std::deque<std::string> logs;
     engine_handle_t media_engine = nullptr;
@@ -1069,20 +1374,29 @@ struct Runtime::Impl final : EmbeddedMovieHost {
     }
 
     void load_game_options(const fs::path &root) {
-        std::ifstream arguments(root / "ons_args");
-        if (!arguments) {
-            return;
-        }
-        std::string value;
-        while (arguments >> value) {
-            if (value == "--enc:sjis") {
-                encoding = "sjis";
-            } else if (value == "--enc:utf8") {
-                encoding = "utf8";
-            } else if (value == "--enc:gbk") {
-                encoding = "gbk";
+        encoding = configured_encoding.empty()
+            ? DetectScriptEncoding(root) : configured_encoding;
+        std::string source = configured_encoding.empty()
+            ? "auto" : "host option";
+        const fs::path arguments_path = FindRootFileCaseInsensitive(root, "ons_args");
+        std::ifstream arguments(arguments_path);
+        if (arguments) {
+            std::string value;
+            while (arguments >> value) {
+                if (value == "--enc:sjis") {
+                    encoding = "sjis";
+                    source = "ons_args";
+                } else if (value == "--enc:utf8") {
+                    encoding = "utf8";
+                    source = "ons_args";
+                } else if (value == "--enc:gbk") {
+                    encoding = "gbk";
+                    source = "ons_args";
+                }
             }
         }
+        append_log("[ONScripter Yuri] script encoding: " + encoding +
+                   " (" + source + ")");
     }
 
     void run_game(fs::path root) {
@@ -1120,11 +1434,8 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             ons->setVsyncOff();
             ons->setArchivePath(root.u8string().c_str());
 
-            const fs::path legacy_save_root =
-                fs::u8path(writable_path) / "onscripter_saves" /
-                StableGameDirectoryName(root);
             const SaveStorageResult save_storage = PrepareSaveStorage(
-                root, legacy_save_root);
+                root, fs::u8path(writable_path));
             if (save_storage.directory.empty()) {
                 throw std::runtime_error(
                     "failed to create a writable ONS save directory: " +
@@ -1134,7 +1445,7 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                 "[ONScripter Yuri] save directory: " +
                 save_storage.directory.u8string() +
                 (save_storage.using_game_directory
-                    ? " (game savedata)" : " (app fallback)"));
+                    ? " (game fallback)" : " (host save library)"));
             if (save_storage.migrated_files > 0) {
                 append_log(
                     "[ONScripter Yuri] migrated " +
@@ -1153,16 +1464,34 @@ struct Runtime::Impl final : EmbeddedMovieHost {
             fs::path font;
             if (!default_font.empty()) {
                 font = fs::u8path(default_font);
-            } else if (fs::is_regular_file(root / "default.ttf", error_code)) {
-                font = root / "default.ttf";
-            } else if (fs::is_regular_file(root / "default.TTF", error_code)) {
-                // iOS uses a case-sensitive data volume while the typical
-                // macOS game library does not. Accept the common uppercase
-                // extension used by converted ONS packages.
-                font = root / "default.TTF";
+            } else {
+                // Imported Windows game trees frequently vary the case of
+                // the canonical font filename on iOS's case-sensitive volume.
+                font = FindRootFileCaseInsensitive(root, "default.ttf");
             }
             if (!font.empty()) {
                 ons->setFontFile(font.u8string().c_str());
+            }
+
+            if (!FindRootFileCaseInsensitive(root, "nscript.___").empty()) {
+                const fs::path key_executable = FindONSKeyExecutable(root);
+                if (key_executable.empty()) {
+                    throw std::runtime_error(
+                        "nscript.___ requires the original Windows executable containing its key table");
+                }
+                std::array<uint8_t, 256> validated_key_table{};
+                if (!LoadONSKeyTable(key_executable, &validated_key_table)) {
+                    // Upstream treats an invalid --key-exe as a fatal
+                    // process exit. Reject it before openScript() so the
+                    // embedded HostExit boundary can report a normal engine
+                    // failure without ever relying on that fatal path.
+                    throw std::runtime_error(
+                        "nscript.___ key executable does not contain a 256-byte permutation table: " +
+                        key_executable.filename().u8string());
+                }
+                ons->setKeyEXE(key_executable.u8string().c_str());
+                append_log("[ONScripter Yuri] keyed script executable: " +
+                           key_executable.filename().u8string());
             }
 
             // ScriptHandler opens the initial 0.txt/nscript.dat relative to
@@ -1181,7 +1510,24 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                     throw std::runtime_error(
                         "failed to enter the ONScripter game directory");
                 }
-                const int open_result = ons->openScript();
+                int open_result = -1;
+                try {
+                    open_result = ons->openScript();
+                } catch (...) {
+                    // openScript() converts upstream exit() calls into
+                    // HostExit. Restore the process-wide cwd before allowing
+                    // that exception to reach the runtime boundary; otherwise
+                    // every later native session resolves relative paths from
+                    // this game's read-only content directory.
+                    std::error_code restore_error;
+                    fs::current_path(previous, restore_error);
+                    if (restore_error) {
+                        append_log(
+                            "[ONScripter Yuri] failed to restore working directory after script error: " +
+                            restore_error.message());
+                    }
+                    throw;
+                }
                 std::error_code restore_error;
                 fs::current_path(previous, restore_error);
                 if (open_result != 0) {
@@ -1370,7 +1716,13 @@ bool Runtime::set_option(const std::string &key, const std::string &value) {
                        [](unsigned char byte) {
                            return static_cast<char>(std::tolower(byte));
                        });
-        impl_->encoding = normalized;
+        if (normalized != "sjis" && normalized != "shift-jis" &&
+            normalized != "shift_jis" && normalized != "utf8" &&
+            normalized != "utf-8" && normalized != "gbk") {
+            impl_->set_error("unsupported ONScripter script encoding: " + value);
+            return false;
+        }
+        impl_->configured_encoding = normalized;
     }
     return true;
 }
@@ -1389,7 +1741,7 @@ bool Runtime::open_game(const std::string &game_root_path) {
     const fs::path root = NormalizeGameRoot(game_root_path);
     if (root.empty() || !HasScriptMarker(root)) {
         impl_->set_error(
-            "no ONScripter script found (expected 0.txt, nscript.dat, onscript.nt2, or onscript.nt3)");
+            "no ONScripter script found (expected 0/00.txt, nscr_sec.dat, nscript.*, or onscript.nt2/nt3)");
         return false;
     }
 

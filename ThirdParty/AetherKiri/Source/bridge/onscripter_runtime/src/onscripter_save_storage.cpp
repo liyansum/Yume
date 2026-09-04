@@ -1,5 +1,6 @@
 #include "onscripter_save_storage.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <fstream>
@@ -11,6 +12,39 @@ namespace aetherkiri::onscripter {
 namespace {
 
 std::atomic<uint64_t> g_probe_serial{0};
+
+std::string CanonicalOnsSaveFileName(const fs::path &path) {
+    std::string name = path.filename().string();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char character) {
+                       return static_cast<char>(std::tolower(character));
+                   });
+
+    if (name == "envdata" || name == "gloval.sav" ||
+        name == "kidoku.dat" || name == "stdout.txt" ||
+        name == "stderr.txt") {
+        return name;
+    }
+    if (name == "nscrllog.dat") {
+        return "NScrllog.dat";
+    }
+    if (name == "nscrflog.dat") {
+        return "NScrflog.dat";
+    }
+
+    constexpr const char *prefix = "save";
+    constexpr const char *suffix = ".dat";
+    if (name.size() <= 4 + 4 || name.compare(0, 4, prefix) != 0 ||
+        name.compare(name.size() - 4, 4, suffix) != 0) {
+        return {};
+    }
+    for (size_t index = 4; index + 4 < name.size(); ++index) {
+        if (!std::isdigit(static_cast<unsigned char>(name[index]))) {
+            return {};
+        }
+    }
+    return name;
+}
 
 void AppendWarning(std::string &warning, const std::string &message) {
     if (!warning.empty()) {
@@ -69,9 +103,15 @@ uint32_t MigrateSaveFiles(const fs::path &source,
     }
     while (iterator != end) {
         const fs::directory_entry entry = *iterator;
-        if (entry.is_regular_file(error) && IsOnsSaveFileName(entry.path())) {
+        const std::string canonical_name =
+            CanonicalOnsSaveFileName(entry.path());
+        if (entry.is_regular_file(error) && !canonical_name.empty()) {
             error.clear();
-            const fs::path target = destination / entry.path().filename();
+            // Windows-authored archives commonly contain SAVE1.DAT or other
+            // case variants. iOS is case-sensitive, so copy into the exact
+            // spelling ONScripter later opens instead of preserving that
+            // incompatible spelling.
+            const fs::path target = destination / canonical_name;
             const bool copied_now = fs::copy_file(
                 entry.path(), target, fs::copy_options::skip_existing, error);
             if (copied_now) {
@@ -96,48 +136,30 @@ uint32_t MigrateSaveFiles(const fs::path &source,
 } // namespace
 
 bool IsOnsSaveFileName(const fs::path &path) {
-    const std::string name = path.filename().string();
-    if (name == "envdata" || name == "gloval.sav" ||
-        name == "kidoku.dat" || name == "NScrllog.dat" ||
-        name == "NScrflog.dat" || name == "stdout.txt" ||
-        name == "stderr.txt") {
-        return true;
-    }
-    constexpr const char *prefix = "save";
-    constexpr const char *suffix = ".dat";
-    if (name.size() <= 4 + 4 || name.compare(0, 4, prefix) != 0 ||
-        name.compare(name.size() - 4, 4, suffix) != 0) {
-        return false;
-    }
-    for (size_t index = 4; index + 4 < name.size(); ++index) {
-        if (!std::isdigit(static_cast<unsigned char>(name[index]))) {
-            return false;
-        }
-    }
-    return true;
+    return !CanonicalOnsSaveFileName(path).empty();
 }
 
 SaveStorageResult PrepareSaveStorage(const fs::path &game_root,
-                                     const fs::path &legacy_directory) {
+                                     const fs::path &host_directory) {
     SaveStorageResult result;
-    const fs::path preferred = game_root / "savedata";
-    if (PrepareWritableDirectory(preferred, result.warning)) {
-        result.directory = preferred;
-        result.using_game_directory = true;
-        // The app-owned store contains saves produced by previous AetherKiri
-        // builds and should win over packaged root-level defaults. Existing
-        // files in savedata always win over both sources.
+    if (PrepareWritableDirectory(host_directory, result.warning)) {
+        result.directory = host_directory;
+        // The host directory is the canonical Save Library. Import legacy
+        // `savedata/` and root-level ONS saves without replacing files already
+        // managed by the app.
         result.migrated_files += MigrateSaveFiles(
-            legacy_directory, preferred, result.warning);
+            game_root / "savedata", host_directory, result.warning);
         result.migrated_files += MigrateSaveFiles(
-            game_root, preferred, result.warning);
+            game_root, host_directory, result.warning);
         return result;
     }
 
-    if (PrepareWritableDirectory(legacy_directory, result.warning)) {
-        result.directory = legacy_directory;
+    const fs::path game_directory = game_root / "savedata";
+    if (PrepareWritableDirectory(game_directory, result.warning)) {
+        result.directory = game_directory;
+        result.using_game_directory = true;
         result.migrated_files += MigrateSaveFiles(
-            game_root, legacy_directory, result.warning);
+            game_root, game_directory, result.warning);
     }
     return result;
 }

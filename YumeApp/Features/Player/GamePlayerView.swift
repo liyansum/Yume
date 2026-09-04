@@ -1,6 +1,5 @@
 import SwiftUI
 @preconcurrency import WebKit
-import UniformTypeIdentifiers
 import QuartzCore
 import YumeApplication
 import YumeDomain
@@ -88,10 +87,8 @@ struct GamePlayerView: View {
     private var showsVirtualControls: Bool {
         guard virtualControlsEnabled, !loadFailed else { return false }
         switch session.launchPlan.kind {
-        case .web:
+        case .web, .embeddedWebRuntime, .hostedRuntime:
             return true
-        case let .hostedRuntime(identifier):
-            return identifier == "mkxp-z"
         default:
             return false
         }
@@ -198,38 +195,6 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             name: WebDiagnosticsBridge.messageName
         )
         configuration.userContentController.addUserScript(diagnosticsBridge.bootstrapScript())
-        let additionalRoots: [String: URL]
-        switch mode {
-        case .game:
-            additionalRoots = [:]
-        case let .ruffle(runtimeRoot, _):
-            additionalRoots = ["runtime": runtimeRoot]
-        }
-        configuration.setURLSchemeHandler(
-            LocalGameSchemeHandler(
-                gameID: location.game.id.rawValue,
-                rootURL: location.rootURL,
-                additionalRoots: additionalRoots,
-                onError: { [coordinator = context.coordinator] message, path in
-                    DispatchQueue.main.async {
-                        coordinator.handleResourceError(message, path: path)
-                    }
-                },
-                onAccess: { [coordinator = context.coordinator] path, mimeType, bytes, requestCount, totalBytes in
-                    DispatchQueue.main.async {
-                        coordinator.handleResourceAccess(
-                            path: path,
-                            mimeType: mimeType,
-                            bytes: bytes,
-                            requestCount: requestCount,
-                            totalBytes: totalBytes
-                        )
-                    }
-                }
-            ),
-            forURLScheme: LocalGameSchemeHandler.scheme
-        )
-
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
@@ -243,7 +208,11 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             webView.isInspectable = false
         }
 
-        context.coordinator.installNetworkBlockerAndLoad(webView, location: location, mode: mode)
+        context.coordinator.startLocalServerAndLoad(
+            webView,
+            location: location,
+            mode: mode
+        )
         return webView
     }
 
@@ -273,6 +242,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        coordinator.stopLocalServer()
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, @unchecked Sendable {
@@ -281,6 +251,10 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         private let baseMetadata: [String: String]
         private var navigationStartedAt: CFTimeInterval?
         private var webMessageCount = 0
+        private var localServer: LocalGameHTTPServer?
+        private var allowedOrigin: String?
+        private var runtimeRoutePrefix: String?
+        private weak var hostedWebView: WKWebView?
         var lastInputCommandID: UUID?
         var isSuspended = false
 
@@ -349,16 +323,111 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             }
         }
 
-        func installNetworkBlockerAndLoad(
+        func startLocalServerAndLoad(
             _ webView: WKWebView,
             location: GameContentLocation,
             mode: WebPlayerMode
         ) {
+            hostedWebView = webView
+            let additionalRoots: [String: URL]
+            switch mode {
+            case .game:
+                runtimeRoutePrefix = nil
+                additionalRoots = [:]
+            case let .ruffle(runtimeRoot, _):
+                // A fixed route such as /runtime can shadow a real directory
+                // in the imported Flash game. Use a per-session namespace so
+                // the movie URL always stays rooted in game content.
+                let prefix = "__yume_runtime_\(UUID().uuidString.lowercased())"
+                runtimeRoutePrefix = prefix
+                additionalRoots = [prefix: runtimeRoot]
+            }
+            do {
+                let server = try LocalGameHTTPServer(
+                    rootURL: location.rootURL,
+                    additionalRoots: additionalRoots,
+                    onError: { [weak self] message, path in
+                        DispatchQueue.main.async {
+                            self?.handleResourceError(message, path: path)
+                        }
+                    },
+                    onAccess: { [weak self] path, mimeType, bytes, requestCount, totalBytes in
+                        DispatchQueue.main.async {
+                            self?.handleResourceAccess(
+                                path: path,
+                                mimeType: mimeType,
+                                bytes: bytes,
+                                requestCount: requestCount,
+                                totalBytes: totalBytes
+                            )
+                        }
+                    }
+                )
+                localServer = server
+                server.start { [weak self] result in
+                    Task { @MainActor in
+                        guard let self, let webView = self.hostedWebView else { return }
+                        switch result {
+                        case let .success(baseURL):
+                            self.allowedOrigin = Self.origin(of: baseURL)
+                            self.onLog(
+                                "web.loopback-ready",
+                                false,
+                                self.metadata(["origin": self.allowedOrigin ?? "unknown"])
+                            )
+                            self.installNetworkBlockerAndLoad(
+                                webView,
+                                location: location,
+                                mode: mode,
+                                baseURL: baseURL
+                            )
+                        case let .failure(error):
+                            self.onLog(
+                                "web.loopback-failed",
+                                true,
+                                self.metadata(["error": String(describing: error)])
+                            )
+                            self.loadFailed = true
+                        }
+                    }
+                }
+            } catch {
+                onLog(
+                    "web.loopback-create-failed",
+                    true,
+                    metadata(["error": String(describing: error)])
+                )
+                loadFailed = true
+            }
+        }
+
+        func stopLocalServer() {
+            localServer?.stop()
+            localServer = nil
+            allowedOrigin = nil
+            runtimeRoutePrefix = nil
+            hostedWebView = nil
+        }
+
+        private func installNetworkBlockerAndLoad(
+            _ webView: WKWebView,
+            location: GameContentLocation,
+            mode: WebPlayerMode,
+            baseURL: URL
+        ) {
+            guard let port = baseURL.port else {
+                onLog("web.loopback-port-missing", true, baseMetadata)
+                loadFailed = true
+                return
+            }
             let rules = """
-            [{"trigger":{"url-filter":"^(https?|wss?|file)://"},"action":{"type":"block"}}]
+            [
+              {"trigger":{"url-filter":"^(https?|wss?|file)://"},"action":{"type":"block"}},
+              {"trigger":{"url-filter":"^http://127[.]0[.]0[.]1:\(port)/"},"action":{"type":"ignore-previous-rules"}}
+            ]
             """
             WKContentRuleListStore.default().compileContentRuleList(
-                forIdentifier: "yume-offline-network-policy-v1",
+                forIdentifier: "yume-loopback-network-policy-v2-\(port)",
                 encodedContentRuleList: rules
             ) { [weak self, weak webView] ruleList, error in
                 Task { @MainActor in
@@ -375,7 +444,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                     }
                     webView.configuration.userContentController.add(ruleList)
                     self.onLog("web.network-policy-ready", false, self.baseMetadata)
-                    self.load(webView, location: location, mode: mode)
+                    self.load(
+                        webView,
+                        location: location,
+                        mode: mode,
+                        baseURL: baseURL
+                    )
                 }
             }
         }
@@ -383,9 +457,9 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         private func load(
             _ webView: WKWebView,
             location: GameContentLocation,
-            mode: WebPlayerMode
+            mode: WebPlayerMode,
+            baseURL: URL
         ) {
-            let host = location.game.id.rawValue.uuidString.lowercased()
             let url: URL?
             switch mode {
             case .game:
@@ -394,17 +468,23 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                     loadFailed = true
                     return
                 }
-                let entry = entryPoint.rawValue.addingPercentEncoding(
-                    withAllowedCharacters: .urlPathAllowed
-                ) ?? entryPoint.rawValue
-                url = URL(string: "\(LocalGameSchemeHandler.scheme)://\(host)/\(entry)")
+                url = Self.url(for: entryPoint, relativeTo: baseURL)
             case let .ruffle(_, movie):
-                let moviePath = movie.rawValue.addingPercentEncoding(
-                    withAllowedCharacters: .urlPathAllowed
-                ) ?? movie.rawValue
-                let movieURL = "\(LocalGameSchemeHandler.scheme)://\(host)/\(moviePath)"
+                guard let runtimeRoutePrefix else {
+                    onLog("web.runtime-route-missing", true, baseMetadata)
+                    loadFailed = true
+                    return
+                }
+                let movieURL = Self.url(
+                    for: movie,
+                    relativeTo: baseURL
+                )?.absoluteString
                 var components = URLComponents(
-                    string: "\(LocalGameSchemeHandler.scheme)://\(host)/runtime/index.html"
+                    url: URL(
+                        string: "\(runtimeRoutePrefix)/index.html",
+                        relativeTo: baseURL
+                    )!.absoluteURL,
+                    resolvingAgainstBaseURL: false
                 )
                 components?.queryItems = [URLQueryItem(name: "movie", value: movieURL)]
                 url = components?.url
@@ -427,7 +507,8 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                 decisionHandler(.cancel)
                 return
             }
-            let allowed = url.scheme == LocalGameSchemeHandler.scheme || url.absoluteString == "about:blank"
+            let allowed = url.absoluteString == "about:blank"
+                || Self.origin(of: url) == allowedOrigin
             if !allowed {
                 onLog("web.navigation-blocked", false, metadata(["url": url.absoluteString]))
             }
@@ -505,6 +586,25 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             additional.forEach { result[$0.key] = String($0.value.prefix(4_000)) }
             if let message { result["detail"] = String(message.prefix(4_000)) }
             return result
+        }
+
+        private static func origin(of url: URL) -> String? {
+            guard let scheme = url.scheme?.lowercased(),
+                  let host = url.host?.lowercased(),
+                  let port = url.port
+            else { return nil }
+            return "\(scheme)://\(host):\(port)"
+        }
+
+        private static func url(
+            for relativePath: StorageRelativePath,
+            relativeTo baseURL: URL
+        ) -> URL {
+            relativePath.rawValue
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .reduce(baseURL) { partial, component in
+                    partial.appendingPathComponent(String(component), isDirectory: false)
+                }
         }
     }
 }
@@ -684,6 +784,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                     case let .failed(code):
                         onLog("native.failed", true, metadata(["code": code]))
                         loadFailed = true
+                        stopRuntimeAfterFailure()
                     }
                 }
             }
@@ -711,6 +812,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                         self?.metadata(["error": String(describing: error)]) ?? [:]
                     )
                     self?.loadFailed = true
+                    self?.stopRuntimeAfterFailure()
                     return
                 }
                 guard let self, self.runtime != nil else { return }
@@ -719,6 +821,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                     guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
                     onLog("native.first-frame-timeout", true, baseMetadata)
                     loadFailed = true
+                    stopRuntimeAfterFailure()
                 }
             }
         }
@@ -749,6 +852,16 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             startTask = nil
             firstFrameWatchdog?.cancel()
             firstFrameWatchdog = nil
+            guard let runtime else { return }
+            self.runtime = nil
+            Task { await runtime.stop() }
+        }
+
+        private func stopRuntimeAfterFailure() {
+            firstFrameWatchdog?.cancel()
+            firstFrameWatchdog = nil
+            startTask?.cancel()
+            startTask = nil
             guard let runtime else { return }
             self.runtime = nil
             Task { await runtime.stop() }
@@ -933,202 +1046,6 @@ private struct GameVirtualControls: View {
         .frame(minWidth: 44, minHeight: 44)
         .contentShape(Circle())
         .accessibilityLabel(accessibilityKey)
-    }
-}
-
-private nonisolated final class LocalGameSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
-    static let scheme = "yume-game"
-
-    private let gameID: UUID
-    private let rootURL: URL
-    private let additionalRoots: [String: URL]
-    private let onError: @Sendable (_ message: String, _ path: String) -> Void
-    private let onAccess: @Sendable (_ path: String, _ mimeType: String, _ bytes: Int64, _ requestCount: UInt64, _ totalBytes: UInt64) -> Void
-    private let queue = DispatchQueue(label: "com.yume.local-game-resources", qos: .userInitiated)
-    private let lock = NSLock()
-    private var stoppedTasks: Set<ObjectIdentifier> = []
-    private var requestCount: UInt64 = 0
-    private var totalBytes: UInt64 = 0
-
-    init(
-        gameID: UUID,
-        rootURL: URL,
-        additionalRoots: [String: URL] = [:],
-        onError: @escaping @Sendable (_ message: String, _ path: String) -> Void,
-        onAccess: @escaping @Sendable (_ path: String, _ mimeType: String, _ bytes: Int64, _ requestCount: UInt64, _ totalBytes: UInt64) -> Void
-    ) {
-        self.gameID = gameID
-        self.rootURL = rootURL.standardizedFileURL
-        self.additionalRoots = additionalRoots.mapValues(\.standardizedFileURL)
-        self.onError = onError
-        self.onAccess = onAccess
-    }
-
-    func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
-        let identifier = ObjectIdentifier(urlSchemeTask)
-        lock.withLock { stoppedTasks.remove(identifier) }
-        let taskBox = SchemeTaskBox(value: urlSchemeTask)
-        queue.async { [weak self, taskBox] in
-            self?.serve(taskBox.value, identifier: identifier)
-        }
-    }
-
-    func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
-        let identifier = ObjectIdentifier(urlSchemeTask)
-        lock.withLock { stoppedTasks.insert(identifier) }
-    }
-
-    private func serve(_ task: any WKURLSchemeTask, identifier: ObjectIdentifier) {
-        defer {
-            lock.withLock { stoppedTasks.remove(identifier) }
-        }
-        do {
-            guard let requestURL = task.request.url,
-                  requestURL.scheme == Self.scheme,
-                  requestURL.host?.caseInsensitiveCompare(gameID.uuidString) == .orderedSame
-            else {
-                throw ResourceError.invalidRequest
-            }
-
-            let decodedPath = requestURL.path.removingPercentEncoding ?? requestURL.path
-            var components = decodedPath
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                .split(separator: "/", omittingEmptySubsequences: true)
-                .map(String.init)
-            let selectedRoot: URL
-            if let prefix = components.first, let routedRoot = additionalRoots[prefix] {
-                selectedRoot = routedRoot
-                components.removeFirst()
-            } else {
-                selectedRoot = rootURL
-            }
-            let relativeValue = components.joined(separator: "/")
-            let relativePath = try StorageRelativePath(rawValue: relativeValue)
-            let fileURL = selectedRoot.appendingPathComponent(relativePath.rawValue).standardizedFileURL
-            guard fileURL.path.hasPrefix(selectedRoot.path + "/") else {
-                throw ResourceError.invalidRequest
-            }
-
-            let values = try fileURL.resourceValues(forKeys: [
-                .isRegularFileKey,
-                .isSymbolicLinkKey,
-                .fileSizeKey,
-                .contentTypeKey
-            ])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else {
-                throw ResourceError.notFound
-            }
-            guard !isStopped(identifier) else { return }
-
-            let mimeType: String
-            switch fileURL.pathExtension.lowercased() {
-            case "wasm": mimeType = "application/wasm"
-            case "swf": mimeType = "application/x-shockwave-flash"
-            case "js": mimeType = "text/javascript"
-            case "html", "htm": mimeType = "text/html"
-            default: mimeType = values.contentType?.preferredMIMEType ?? "application/octet-stream"
-            }
-            let fileSize = Int64(values.fileSize ?? 0)
-            let requestedRange = try Self.byteRange(
-                from: task.request.value(forHTTPHeaderField: "Range"),
-                fileSize: fileSize
-            )
-            let startOffset = requestedRange?.lowerBound ?? 0
-            let endOffset = requestedRange?.upperBound ?? max(0, fileSize - 1)
-            let responseLength = fileSize == 0 ? 0 : endOffset - startOffset + 1
-            var headers = [
-                "Content-Type": mimeType,
-                "Content-Length": String(responseLength),
-                "Accept-Ranges": "bytes"
-            ]
-            if requestedRange != nil {
-                headers["Content-Range"] = "bytes \(startOffset)-\(endOffset)/\(fileSize)"
-            }
-            guard let response = HTTPURLResponse(
-                url: requestURL,
-                statusCode: requestedRange == nil ? 200 : 206,
-                httpVersion: "HTTP/1.1",
-                headerFields: headers
-            ) else {
-                throw ResourceError.invalidRequest
-            }
-            task.didReceive(response)
-
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
-            try handle.seek(toOffset: UInt64(startOffset))
-            var remaining = responseLength
-            while !isStopped(identifier), remaining > 0 {
-                let chunkSize = Int(min(Int64(64 * 1_024), remaining))
-                let data = try handle.read(upToCount: chunkSize) ?? Data()
-                guard !data.isEmpty else { break }
-                task.didReceive(data)
-                remaining -= Int64(data.count)
-            }
-            guard !isStopped(identifier) else { return }
-            task.didFinish()
-            let totals: (UInt64, UInt64) = lock.withLock {
-                requestCount += 1
-                totalBytes += UInt64(max(0, responseLength))
-                return (requestCount, totalBytes)
-            }
-            if totals.0 <= 100 || totals.0 % 100 == 0 {
-                onAccess(relativePath.rawValue, mimeType, responseLength,
-                         totals.0, totals.1)
-            }
-        } catch {
-            guard !isStopped(identifier) else { return }
-            let requestedPath = task.request.url?.path ?? "unknown"
-            onError(String(describing: error), requestedPath)
-            task.didFailWithError(error)
-        }
-    }
-
-    private func isStopped(_ identifier: ObjectIdentifier) -> Bool {
-        lock.withLock { stoppedTasks.contains(identifier) }
-    }
-
-    private static func byteRange(from header: String?, fileSize: Int64) throws -> ClosedRange<Int64>? {
-        guard let header else { return nil }
-        guard fileSize > 0,
-              header.hasPrefix("bytes="),
-              !header.contains(",")
-        else { throw ResourceError.invalidRange }
-
-        let value = header.dropFirst("bytes=".count)
-        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 2 else { throw ResourceError.invalidRange }
-
-        if parts[0].isEmpty {
-            guard let suffixLength = Int64(parts[1]), suffixLength > 0 else {
-                throw ResourceError.invalidRange
-            }
-            let start = max(0, fileSize - suffixLength)
-            return start...(fileSize - 1)
-        }
-
-        guard let start = Int64(parts[0]), start >= 0, start < fileSize else {
-            throw ResourceError.invalidRange
-        }
-        let end: Int64
-        if parts[1].isEmpty {
-            end = fileSize - 1
-        } else if let requestedEnd = Int64(parts[1]), requestedEnd >= start {
-            end = min(requestedEnd, fileSize - 1)
-        } else {
-            throw ResourceError.invalidRange
-        }
-        return start...end
-    }
-
-    private enum ResourceError: Error {
-        case invalidRequest
-        case notFound
-        case invalidRange
-    }
-
-    private struct SchemeTaskBox: @unchecked Sendable {
-        let value: any WKURLSchemeTask
     }
 }
 

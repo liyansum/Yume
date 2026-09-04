@@ -64,8 +64,19 @@ export CARGO_TARGET_DIR="$project_root/.native-build/art3m1s/target"
 cargo rustc --manifest-path "$source_root/Cargo.toml" --release \
     --target "$rust_target" --lib -- --crate-type staticlib
 
-built_archive="$CARGO_TARGET_DIR/$rust_target/release/libart3m1s_core.a"
-[[ -s "$built_archive" ]] || { echo "art3m1s static archive was not produced." >&2; exit 3; }
+release_root="$CARGO_TARGET_DIR/$rust_target/release"
+built_archive="$release_root/libart3m1s_core.a"
+if [[ ! -s "$built_archive" ]]; then
+    # cargo rustc places command-line-only crate types in deps/ on newer
+    # toolchains instead of promoting them to the profile directory.
+    built_archive="$(find "$release_root" -maxdepth 2 -type f \
+        -name 'libart3m1s_core*.a' -size +0c -print -quit)"
+fi
+if [[ -z "$built_archive" ]] || [[ ! -s "$built_archive" ]]; then
+    echo "art3m1s static archive was not produced; release artifacts:" >&2
+    find "$release_root" -maxdepth 2 -type f -print >&2 || true
+    exit 3
+fi
 mkdir -p "$artifact_root"
 /usr/bin/ditto --noqtn "$built_archive" "$core_archive"
 

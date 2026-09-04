@@ -8,11 +8,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
+#include <limits>
 #include <mutex>
 #include <new>
-#include <signal.h>
 #include <string>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 
@@ -23,44 +23,9 @@
 #include "../../ThirdParty/AetherKiri/Source/bridge/engine_api/include/engine_options.h"
 #include "../../ThirdParty/AetherKiri/Source/bridge/onscripter_runtime/include/onscripter_runtime.h"
 
-@interface YumeAetherEngineWork : NSObject
-@property (nonatomic, copy) void (^block)(void);
-- (void)invoke;
-@end
-@implementation YumeAetherEngineWork
-- (void)invoke {
-    if (self.block != nil) self.block();
-}
-@end
-
 enum class AetherRuntimeKind { Kirikiri, ONScripter };
 
 struct AetherSession;
-
-static volatile sig_atomic_t gAetherCrashLogFD = -1;
-static std::mutex gAetherCrashHandlerMutex;
-
-static void AetherCrashSignalHandler(int signalNumber) {
-    const int fd = static_cast<int>(gAetherCrashLogFD);
-    if (fd < 0) return;
-    static const char prefix[] = "native.crash signal=";
-    (void)write(fd, prefix, sizeof(prefix) - 1);
-    char number[16] = {};
-    unsigned int value = signalNumber < 0
-        ? static_cast<unsigned int>(-signalNumber)
-        : static_cast<unsigned int>(signalNumber);
-    int index = static_cast<int>(sizeof(number)) - 2;
-    do {
-        number[index--] = static_cast<char>('0' + value % 10u);
-        value /= 10u;
-    } while (value > 0 && index >= 0);
-    if (signalNumber < 0 && index >= 0) number[index--] = '-';
-    (void)write(fd, number + index + 1, sizeof(number) - index - 2);
-    (void)write(fd, "\n", 1);
-    (void)fsync(fd);
-    // SA_RESETHAND restores the default disposition before entry. Returning
-    // preserves Apple's normal crash report while retaining this breadcrumb.
-}
 
 static void ReleaseFramePixels(void *, const void *data, size_t) {
     free(const_cast<void *>(data));
@@ -72,6 +37,7 @@ static void Emit(AetherSession *session, YumeRuntimeEventKind kind,
 @interface YumeAetherRuntimeView : UIView
 - (instancetype)initWithSession:(AetherSession *)session;
 - (int32_t)startEngine;
+- (int32_t)startEngineIfAttached;
 - (int32_t)pauseEngine;
 - (int32_t)resumeEngine;
 - (int32_t)sendKey:(int32_t)key pressed:(BOOL)pressed;
@@ -96,6 +62,9 @@ struct AetherSession {
     __strong YumeAetherRuntimeView *view = nil;
     std::atomic<bool> stopped{false};
     std::mutex log_mutex;
+    bool savedata_environment_captured = false;
+    bool savedata_environment_existed = false;
+    std::string savedata_environment_value;
 };
 
 static void AppendHostLog(AetherSession *session, const std::string &message) {
@@ -159,39 +128,6 @@ static void AppendEngineError(AetherSession *session, engine_handle_t engine,
     AppendHostLog(session, line);
 }
 
-static void InstallAetherCrashBreadcrumb(AetherSession *session) {
-    if (session == nullptr || session->log_root.empty()) return;
-    AppendHostLog(session, "crash-handler.install.begin");
-    @autoreleasepool {
-        NSString *root = [NSString stringWithUTF8String:session->log_root.c_str()];
-        if (root.length == 0) return;
-        [[NSFileManager defaultManager] createDirectoryAtPath:root
-                                  withIntermediateDirectories:YES
-                                                   attributes:nil
-                                                        error:nil];
-        NSString *path = [root stringByAppendingPathComponent:@"aetherkiri-crash.log"];
-        const int fd = open(path.fileSystemRepresentation,
-                            O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-        if (fd < 0) {
-            AppendHostLog(session, "crash-handler.open.failed");
-            return;
-        }
-        std::lock_guard<std::mutex> guard(gAetherCrashHandlerMutex);
-        const int previous = static_cast<int>(gAetherCrashLogFD);
-        gAetherCrashLogFD = fd;
-        if (previous >= 0) close(previous);
-        const int signals[] = {SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
-        for (const int signalNumber : signals) {
-            struct sigaction action {};
-            action.sa_handler = AetherCrashSignalHandler;
-            sigemptyset(&action.sa_mask);
-            action.sa_flags = SA_RESETHAND;
-            (void)sigaction(signalNumber, &action, nullptr);
-        }
-    }
-    AppendHostLog(session, "crash-handler.install.end");
-}
-
 static void Emit(AetherSession *session, YumeRuntimeEventKind kind,
                  const char *code) {
     if (session == nullptr || session->callback == nullptr) return;
@@ -243,10 +179,6 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     AetherSession *_session;
     engine_handle_t _engine;
     CADisplayLink *_displayLink;
-    NSThread *_engineThread;
-    NSPort *_enginePort;
-    dispatch_semaphore_t _engineReady;
-    std::atomic<bool> _frameWorkPending;
     std::atomic<bool> _workerStopped;
     std::atomic<bool> _workerPaused;
     uint64_t _lastFrameSerial;
@@ -260,9 +192,15 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     uint64_t _tickCount;
     uint64_t _presentedFrameCount;
     uint64_t _inputSequence;
+    std::unordered_map<int32_t, CGPoint> _activeTouchPoints;
+    std::unordered_map<uintptr_t, int32_t> _touchPointerIDs;
+    int32_t _nextTouchPointerID;
     CFTimeInterval _statsStartedAt;
     BOOL _startupResolved;
     BOOL _firstFrameSent;
+    BOOL _startRequested;
+    BOOL _engineStarting;
+    BOOL _startFailed;
     BOOL _paused;
     BOOL _stopped;
 }
@@ -271,9 +209,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     self = [super initWithFrame:CGRectZero];
     if (self) {
         _session = session;
-        _frameWorkPending.store(false);
         _workerStopped.store(false);
         _workerPaused.store(false);
+        _nextTouchPointerID = 100000;
         _lastStartupState = static_cast<uint32_t>(-1);
         _statsStartedAt = CACurrentMediaTime();
         self.backgroundColor = UIColor.blackColor;
@@ -286,35 +224,12 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     return self;
 }
 
-- (void)engineThreadMain {
-    @autoreleasepool {
-        _enginePort = [NSMachPort port];
-        NSRunLoop *loop = [NSRunLoop currentRunLoop];
-        [loop addPort:_enginePort forMode:NSDefaultRunLoopMode];
-        if (_engineReady != nullptr) dispatch_semaphore_signal(_engineReady);
-        while (!_workerStopped.load()) {
-            [loop runMode:NSDefaultRunLoopMode
-               beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
-        }
-        [_displayLink invalidate];
-        _displayLink = nil;
-        if (_enginePort != nil) {
-            [loop removePort:_enginePort forMode:NSDefaultRunLoopMode];
-            _enginePort = nil;
-        }
-    }
-}
-
-- (void)startEngineThreadIfNeeded {
-    if (_engineThread != nil) return;
-    _engineReady = dispatch_semaphore_create(0);
-    _engineThread = [[NSThread alloc] initWithTarget:self
-                                            selector:@selector(engineThreadMain)
-                                              object:nil];
-    _engineThread.name = @"yume.aetherkiri.engine";
-    _engineThread.qualityOfService = NSQualityOfServiceUserInteractive;
-    [_engineThread start];
-    dispatch_semaphore_wait(_engineReady, DISPATCH_TIME_FOREVER);
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window == nil || _stopped) return;
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    (void)[self startEngineIfAttached];
 }
 
 - (void)runOnEngineThread:(void (^)(void))work waitUntilDone:(BOOL)wait {
@@ -359,23 +274,43 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
             (void)engine_set_surface_size(_engine, width, height);
         }
     } waitUntilDone:NO];
+    (void)[self startEngineIfAttached];
 }
 
 - (int32_t)startEngine {
     if (_stopped || _session == nullptr) return -1;
+    if (_startFailed) return -2;
+    _startRequested = YES;
     [self layoutIfNeeded];
-    AppendHostLog(_session, "start.on-main");
-    const int32_t openResult = [self startEngineOnEngineThread];
-    if (openResult != 0) return openResult;
-    _displayLink = [CADisplayLink displayLinkWithTarget:self
-                                               selector:@selector(displayLinkDidFire:)];
-    if (@available(iOS 15.0, *)) {
-        _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
-    } else {
-        _displayLink.preferredFramesPerSecond = 60;
+    if (self.window == nil || CGRectIsEmpty(self.bounds)) {
+        AppendHostLog(_session, "start.deferred-until-view-attached");
+        return 0;
     }
-    [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-    return 0;
+    return [self startEngineIfAttached];
+}
+
+- (int32_t)startEngineIfAttached {
+    if (!_startRequested || _stopped || _session == nullptr) return 0;
+    if (_engine != nullptr || _engineStarting) return 0;
+    if (_startFailed) return -2;
+    if (self.window == nil || CGRectIsEmpty(self.bounds)) return 0;
+
+    _engineStarting = YES;
+    AppendHostLog(_session, "start.on-attached-main-view");
+    const int32_t openResult = [self startEngineOnEngineThread];
+    if (openResult == 0 && _displayLink == nil) {
+        _displayLink = [CADisplayLink displayLinkWithTarget:self
+                                                   selector:@selector(displayLinkDidFire:)];
+        if (@available(iOS 15.0, *)) {
+            _displayLink.preferredFrameRateRange = CAFrameRateRangeMake(30, 60, 60);
+        } else {
+            _displayLink.preferredFramesPerSecond = 60;
+        }
+        [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    }
+    _engineStarting = NO;
+    if (openResult != 0) _startFailed = YES;
+    return openResult;
 }
 
 - (int32_t)startEngineOnEngineThread {
@@ -428,6 +363,20 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     }
     AppendHostLog(_session, "start.configured");
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.configured"];
+    if (_lastSurfaceWidth > 0 && _lastSurfaceHeight > 0) {
+        const engine_result_t surfaceResult = engine_set_surface_size(
+            _engine, _lastSurfaceWidth, _lastSurfaceHeight);
+        AppendHostLog(_session, "start.surface-size result=" +
+            std::to_string(static_cast<int>(surfaceResult)) + " pixels=" +
+            std::to_string(_lastSurfaceWidth) + "x" +
+            std::to_string(_lastSurfaceHeight));
+        if (surfaceResult != ENGINE_RESULT_OK) {
+            [self emitOnMain:YUME_RUNTIME_EVENT_FAILED code:"aether.surface"];
+            engine_destroy(_engine);
+            _engine = nullptr;
+            return static_cast<int32_t>(surfaceResult);
+        }
+    }
     NSString *fontPath = BundledDefaultFontPath();
     if (fontPath.length > 0) {
         const engine_result_t fontResult =
@@ -439,6 +388,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         AppendHostLog(_session, "start.default-font missing");
     }
     if (!_session->save_root.empty()) {
+        const char *previous = std::getenv("YUME_KIRIKIRI_SAVEDATA");
+        _session->savedata_environment_captured = true;
+        _session->savedata_environment_existed = previous != nullptr;
+        _session->savedata_environment_value = previous != nullptr ? previous : "";
         setenv("YUME_KIRIKIRI_SAVEDATA", _session->save_root.c_str(), 1);
         AppendHostLog(_session, "start.savedata=" + _session->save_root);
     }
@@ -577,20 +530,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
                       minimum, maximum, _presentedFrameCount / elapsed);
         AppendHostLog(_session, line);
     }
-    // DebugCpu stores scanlines with origin at the bottom. Flip so
-    // UIKit shows the scene right-side up and tap mapping matches.
-    {
-        auto *bytes = static_cast<uint8_t *>(pixels);
-        const size_t stride = frame.stride_bytes;
-        std::vector<uint8_t> row(stride);
-        for (uint32_t y = 0; y < frame.height / 2; ++y) {
-            uint8_t *top = bytes + static_cast<size_t>(y) * stride;
-            uint8_t *bottom = bytes + static_cast<size_t>(frame.height - 1 - y) * stride;
-            memcpy(row.data(), top, stride);
-            memcpy(top, bottom, stride);
-            memcpy(bottom, row.data(), stride);
-        }
-    }
+    // engine_read_frame_rgba exposes top-to-bottom scanlines. Kirikiri's GL
+    // fallback performs its required GL-origin conversion in engine_api, and
+    // the ONS provider copies SDL's already top-down surface rows. Flipping at
+    // this host boundary would invert both engines and desynchronise taps.
 
     CGDataProviderRef provider = CGDataProviderCreateWithData(
         nullptr, pixels, byteCount, ReleaseFramePixels);
@@ -705,20 +648,17 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (string == nil) return -1;
     [self runOnEngineThread:^{
         if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
-        [string enumerateSubstringsInRange:NSMakeRange(0, string.length)
-                                   options:NSStringEnumerationByComposedCharacterSequences
-                                usingBlock:^(NSString *substring, NSRange, NSRange, BOOL *stop) {
-            NSData *utf32 = [substring dataUsingEncoding:NSUTF32LittleEndianStringEncoding];
-            if (utf32.length < sizeof(uint32_t)) return;
-            uint32_t scalar = 0;
-            [utf32 getBytes:&scalar length:sizeof(scalar)];
+        NSData *utf32 = [string dataUsingEncoding:NSUTF32LittleEndianStringEncoding];
+        const auto *scalars = static_cast<const uint32_t *>(utf32.bytes);
+        const NSUInteger scalarCount = utf32.length / sizeof(uint32_t);
+        for (NSUInteger index = 0; index < scalarCount; ++index) {
             engine_input_event_t event{};
             event.struct_size = sizeof(event);
             event.type = ENGINE_INPUT_EVENT_TEXT_INPUT;
             event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
-            event.unicode_codepoint = scalar;
-            if (engine_send_input(_engine, &event) != ENGINE_RESULT_OK) *stop = YES;
-        }];
+            event.unicode_codepoint = scalars[index];
+            if (engine_send_input(_engine, &event) != ENGINE_RESULT_OK) break;
+        }
     } waitUntilDone:NO];
     return 0;
 }
@@ -734,9 +674,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGFloat originY = (viewSize.height - contentHeight) * 0.5;
     const CGFloat mappedX = std::clamp((point.x - originX) / scale, 0.0, (double)_frameWidth - 1.0);
     const CGFloat mappedY = std::clamp((point.y - originY) / scale, 0.0, (double)_frameHeight - 1.0);
-    // UIKit and Kirikiri both expose pointer coordinates from the logical
-    // top-left. The CPU framebuffer has a bottom-up row layout, but that is
-    // corrected only while presenting the image and must not leak into input.
+    // UIKit and both runtime providers expose pointer coordinates from the
+    // logical top-left, matching the frame ABI's scanline order.
     return CGPointMake(mappedX, mappedY);
 }
 
@@ -745,6 +684,21 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGPoint viewPoint = CGPointMake(x, y);
     const CGSize viewSize = self.bounds.size;
     CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
+    const int32_t pointerID = 0;
+    const uint32_t type = pressed ? ENGINE_INPUT_EVENT_POINTER_DOWN
+                                  : ENGINE_INPUT_EVENT_POINTER_UP;
+    double deltaX = 0;
+    double deltaY = 0;
+    const auto previous = _activeTouchPoints.find(pointerID);
+    if (previous != _activeTouchPoints.end()) {
+        deltaX = point.x - previous->second.x;
+        deltaY = point.y - previous->second.y;
+    }
+    if (type == ENGINE_INPUT_EVENT_POINTER_UP) {
+        _activeTouchPoints.erase(pointerID);
+    } else {
+        _activeTouchPoints[pointerID] = point;
+    }
     [self runOnEngineThread:^{
         if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
         engine_input_event_t event{};
@@ -753,6 +707,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
         event.x = point.x;
         event.y = point.y;
+        event.delta_x = deltaX;
+        event.delta_y = deltaY;
         event.pointer_id = 0;
         // Aether's input ABI follows SDL button numbering: 0 is primary/left,
         // 1 is secondary/right. Touch must always synthesize the primary one.
@@ -774,11 +730,31 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGPoint viewPoint = [touch locationInView:self];
     const CGSize viewSize = self.bounds.size;
     const uint64_t timestamp = static_cast<uint64_t>(touch.timestamp * 1000000.0);
-    const int32_t pointerID = static_cast<int32_t>(
-        reinterpret_cast<uintptr_t>((__bridge void *)touch) & 0x7fffffff
-    );
+    const uintptr_t touchKey = reinterpret_cast<uintptr_t>((__bridge void *)touch);
+    auto pointerEntry = _touchPointerIDs.find(touchKey);
+    if (pointerEntry == _touchPointerIDs.end()) {
+        if (type == ENGINE_INPUT_EVENT_POINTER_UP) return;
+        if (_nextTouchPointerID == std::numeric_limits<int32_t>::max()) {
+            _nextTouchPointerID = 100000;
+        }
+        pointerEntry = _touchPointerIDs.emplace(touchKey, _nextTouchPointerID++).first;
+    }
+    const int32_t pointerID = pointerEntry->second;
     const BOOL cancelled = touch.phase == UITouchPhaseCancelled;
     CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
+    double deltaX = 0;
+    double deltaY = 0;
+    const auto previous = _activeTouchPoints.find(pointerID);
+    if (previous != _activeTouchPoints.end()) {
+        deltaX = point.x - previous->second.x;
+        deltaY = point.y - previous->second.y;
+    }
+    if (type == ENGINE_INPUT_EVENT_POINTER_UP) {
+        _activeTouchPoints.erase(pointerID);
+        _touchPointerIDs.erase(touchKey);
+    } else {
+        _activeTouchPoints[pointerID] = point;
+    }
     [self runOnEngineThread:^{
         if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
         engine_input_event_t event{};
@@ -787,6 +763,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         event.timestamp_micros = timestamp;
         event.x = point.x;
         event.y = point.y;
+        event.delta_x = deltaX;
+        event.delta_y = deltaY;
         event.pointer_id = pointerID;
         event.button = 0;
         if (cancelled) event.modifiers = ENGINE_INPUT_MODIFIER_POINTER_CANCEL;
@@ -794,10 +772,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         if (type != ENGINE_INPUT_EVENT_POINTER_MOVE || result != ENGINE_RESULT_OK) {
             char line[256];
             std::snprintf(line, sizeof(line),
-                          "input.pointer sequence=%llu source=touch type=%u id=%d view=%.1f,%.1f mapped=%.1f,%.1f frame=%ux%u cancelled=%d result=%d",
+                          "input.pointer sequence=%llu source=touch type=%u id=%d view=%.1f,%.1f mapped=%.1f,%.1f delta=%.1f,%.1f frame=%ux%u cancelled=%d result=%d",
                           static_cast<unsigned long long>(++_inputSequence), type,
                           pointerID, viewPoint.x, viewPoint.y, point.x, point.y,
-                          _frameWidth, _frameHeight, cancelled ? 1 : 0,
+                          deltaX, deltaY, _frameWidth, _frameHeight, cancelled ? 1 : 0,
                           static_cast<int>(result));
             AppendHostLog(_session, line);
         }
@@ -836,8 +814,21 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         }
     } waitUntilDone:YES];
     _workerStopped.store(true);
+    _activeTouchPoints.clear();
+    _touchPointerIDs.clear();
     SDL_iPhoneSetEventPump(SDL_FALSE);
     if (_session != nullptr) {
+        if (_session->savedata_environment_captured) {
+            if (_session->savedata_environment_existed) {
+                setenv("YUME_KIRIKIRI_SAVEDATA",
+                       _session->savedata_environment_value.c_str(), 1);
+            } else {
+                unsetenv("YUME_KIRIKIRI_SAVEDATA");
+            }
+            _session->savedata_environment_captured = false;
+            _session->savedata_environment_value.clear();
+            AppendHostLog(_session, "stop.savedata-environment-restored");
+        }
         _session->stopped.store(true);
         [self emitOnMain:YUME_RUNTIME_EVENT_STOPPED code:"aether.stopped"];
     }
@@ -879,7 +870,7 @@ static int32_t CreateSession(AetherRuntimeKind kind,
     AppendAetherPathSummary(session, "save", session->save_root);
     AppendAetherPathSummary(session, "derived", session->derived_root);
     AppendAetherPathSummary(session, "logs", session->log_root);
-    InstallAetherCrashBreadcrumb(session);
+    AppendHostLog(session, "crash-handler=system-default shared-process-safe");
     OnMainSync(^NSInteger {
         session->view = [[YumeAetherRuntimeView alloc] initWithSession:session];
         return session->view != nil ? 0 : -1;

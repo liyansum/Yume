@@ -158,17 +158,17 @@ final class BuiltInGameDetectorsTests: XCTestCase {
                        "plugin/shrinkCopy.tpm")
     }
 
-    func testNT2IsReportedAsUnsupportedONS() throws {
+    func testSupportedNT2SelectsONSRuntime() throws {
         let snapshot = DetectionSnapshot(
             rootRelativePath: try StorageRelativePath(rawValue: "original"),
-            regularFiles: ["nscript.nt2"],
+            regularFiles: ["onscript.nt2"],
             directories: []
         )
         guard case let .selected(result) = BuiltInGameDetectors.registry.decide(snapshot) else {
             return XCTFail("Expected ONS detection for nt2")
         }
         XCTAssertEqual(result.engine.id.rawValue, "onscripter")
-        XCTAssertEqual(result.compatibility.status, .unsupported)
+        XCTAssertEqual(result.compatibility.status, .runnable)
     }
 
     func testEveryDeclaredEngineFamilyIsRunnableInTheBundledBuild() {

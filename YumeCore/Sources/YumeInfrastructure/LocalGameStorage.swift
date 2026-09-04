@@ -717,15 +717,33 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             manifest.contentRoot.rawValue,
             isDirectory: true
         ).standardizedFileURL
-        let nestedWebRoot = contentRoot.appendingPathComponent("www", isDirectory: true)
-        if fileManager.fileExists(atPath: nestedWebRoot.appendingPathComponent("index.html").path) {
-            contentRoot = nestedWebRoot
+        // Only desktop RPG Maker exports use `www` as their browser document
+        // root. Other engines may legitimately ship an unrelated www/index.html
+        // next to their real entry point (notably a SWF); descending for every
+        // engine would leave runtimeEntryPoint rooted at the old directory and
+        // produce paths such as www/www/game.swf.
+        let usesNestedRPGMakerWebRoot = ["rpg-maker-mv", "rpg-maker-mz"]
+            .contains(manifest.game.engine.id.rawValue)
+        if usesNestedRPGMakerWebRoot,
+           let nestedWebRoot = try existingChild(
+            named: "www",
+            in: contentRoot,
+            expectedDirectory: true
+        ), try existingChild(
+            named: "index.html",
+            in: nestedWebRoot,
+            expectedDirectory: false
+        ) != nil {
+            contentRoot = nestedWebRoot.standardizedFileURL
         }
         let entryPointNames = ["index.html", "tyrano.html", "game.html"]
-        let entryPoint = entryPointNames.compactMap { name -> StorageRelativePath? in
-            let url = contentRoot.appendingPathComponent(name)
-            guard fileManager.fileExists(atPath: url.path) else { return nil }
-            return try? StorageRelativePath(rawValue: name)
+        let entryPoint = try entryPointNames.lazy.compactMap { name -> StorageRelativePath? in
+            guard let url = try existingChild(
+                named: name,
+                in: contentRoot,
+                expectedDirectory: false
+            ) else { return nil }
+            return try StorageRelativePath(rawValue: url.lastPathComponent)
         }.first
         let runtimeEntryPoint = manifest.detection.evidence.first { evidence in
             evidence.kind == .requiredFile
@@ -740,6 +758,39 @@ public actor LocalGameStorage: GameImportStorage, GameLibrary, GameContentProvid
             webEntryPoint: entryPoint,
             runtimeEntryPoint: runtimeEntryPoint
         )
+    }
+
+    private func existingChild(
+        named name: String,
+        in directory: URL,
+        expectedDirectory: Bool
+    ) throws -> URL? {
+        let keys: Set<URLResourceKey> = [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey
+        ]
+        let exact = directory.appendingPathComponent(name)
+        if let values = try? exact.resourceValues(forKeys: keys),
+           values.isSymbolicLink != true,
+           expectedDirectory ? values.isDirectory == true : values.isRegularFile == true {
+            return exact
+        }
+        let children = try fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: Array(keys),
+            options: []
+        )
+        return try children.first { child in
+            guard child.lastPathComponent.compare(
+                name,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            ) == .orderedSame else { return false }
+            let values = try child.resourceValues(forKeys: keys)
+            return values.isSymbolicLink != true &&
+                (expectedDirectory ? values.isDirectory == true : values.isRegularFile == true)
+        }
     }
 
     public func exportSaves(for id: GameID) async throws -> URL {
