@@ -1,0 +1,82 @@
+name: Export native runtime cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-native-runtime-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  export-cache:
+    name: Export verified iOS native runtimes
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      # hashFiles must run after checkout. Persisting the exact key also puts
+      # the same value into the downloadable manifest.
+      - name: Resolve exact native artifact cache key
+        env:
+          RESOLVED_CACHE_KEY: yume-native-artifacts-v1-${{ runner.os }}-${{ runner.arch }}-xcode-26.6-${{ hashFiles('Scripts/build_native_runtimes.sh', 'Scripts/build_aetherkiri_runtime.sh', 'Scripts/build_art3m1s_runtime.sh', 'Scripts/build_renpy_runtime.sh', 'Scripts/rebuild_mkxpz_core.sh', 'Scripts/stage_mkxpz_runtime.sh', 'Scripts/stage_renpy_runtime.sh', 'Scripts/verify_native_runtimes.sh', 'Scripts/Support/RuntimeFrameworkInfo.plist', 'ThirdParty/RuntimeDependencies.lock.json', 'ThirdParty/RenPy/renpy_entry.c', 'ThirdParty/AetherKiri/Source/**', 'ThirdParty/MKXPZ/Source/**') }}
+        run: echo "NATIVE_ARTIFACT_CACHE_KEY=$RESOLVED_CACHE_KEY" >> "$GITHUB_ENV"
+
+      - name: Restore verified native artifacts
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ThirdParty/AetherKiri/Artifacts
+            ThirdParty/MKXPZ/Artifacts
+            ThirdParty/RenPy/Artifacts
+            ThirdParty/Art3m1s/Artifacts
+          key: ${{ env.NATIVE_ARTIFACT_CACHE_KEY }}
+          fail-on-cache-miss: true
+
+      - name: Verify restored native artifacts
+        run: Scripts/verify_native_runtimes.sh iphoneos
+
+      # A plain tar preserves framework symlinks and file modes. Artifact
+      # compression stays disabled because static libraries are already large
+      # and recompressing them makes this maintenance job unnecessarily slow.
+      - name: Create portable cache archive
+        id: archive
+        run: |
+          export_root="$RUNNER_TEMP/YumeNativeRuntimeCache"
+          archive_name="Yume-native-runtime-cache-${GITHUB_SHA:0:12}-iphoneos-arm64.tar"
+          mkdir -p "$export_root"
+          /usr/bin/tar -cf "$export_root/$archive_name" \
+            ThirdParty/AetherKiri/Artifacts \
+            ThirdParty/MKXPZ/Artifacts \
+            ThirdParty/RenPy/Artifacts \
+            ThirdParty/Art3m1s/Artifacts
+          (
+            cd "$export_root"
+            shasum -a 256 "$archive_name" > "$archive_name.sha256"
+          )
+          {
+            echo "repository=$GITHUB_REPOSITORY"
+            echo "source_commit=$GITHUB_SHA"
+            echo "platform=iphoneos"
+            echo "architecture=arm64"
+            echo "xcode=26.6"
+            echo "actions_cache_key=$NATIVE_ARTIFACT_CACHE_KEY"
+          } > "$export_root/manifest.txt"
+          echo "export_root=$export_root" >> "$GITHUB_OUTPUT"
+          ls -lh "$export_root"
+
+      - name: Upload portable native runtime cache
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yume-native-runtime-cache-${{ github.run_number }}
+          path: ${{ steps.archive.outputs.export_root }}/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
