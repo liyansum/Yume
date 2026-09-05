@@ -478,7 +478,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                 let movieURL = Self.url(
                     for: movie,
                     relativeTo: baseURL
-                )?.absoluteString
+                ).absoluteString
                 var components = URLComponents(
                     url: URL(
                         string: "\(runtimeRoutePrefix)/index.html",
