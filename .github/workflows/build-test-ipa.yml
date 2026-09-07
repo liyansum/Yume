@@ -89,6 +89,20 @@ jobs:
       - name: Run pre-test gate
         run: Scripts/verify_pretest.sh
 
+      - name: Generate device probes
+        run: python3 Scripts/generate_runtime_probes.py --output "$RUNNER_TEMP/YumeProbes"
+
+      - name: Upload device probes
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yume-device-probes-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/YumeProbes/*.zip
+            ${{ runner.temp }}/YumeProbes/*.json
+            ${{ runner.temp }}/YumeProbes/*.csv
+            ${{ runner.temp }}/YumeProbes/README.txt
+          retention-days: 14
+
       - name: Build changed native runtimes
         run: Scripts/build_native_runtimes.sh iphoneos
 
@@ -120,7 +134,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/YumeDerivedData" \
             -resultBundlePath "$RUNNER_TEMP/Yume-build.xcresult" \
-            INFOPLIST_KEY_YumeSourceRevision="$GITHUB_SHA" \
+            YUME_SOURCE_REVISION="$GITHUB_SHA" \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=YES \
@@ -131,6 +145,9 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee "$RUNNER_TEMP/Yume-build.log"
 
+      - name: Verify built app provenance and resources
+        run: python3 Scripts/verify_built_app.py "$RUNNER_TEMP/YumeDerivedData/Build/Products/Release-iphoneos/Yume.app" --revision "$GITHUB_SHA" --build "$GITHUB_RUN_NUMBER"
+
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -139,6 +156,15 @@ jobs:
           path: |
             ${{ runner.temp }}/Yume-build.log
             ${{ runner.temp }}/Yume-build.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload app debug symbols
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yume-debug-symbols-${{ github.run_number }}
+          path: ${{ runner.temp }}/YumeDerivedData/Build/Products/Release-iphoneos/Yume.app.dSYM
           if-no-files-found: ignore
           retention-days: 14
 

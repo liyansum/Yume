@@ -1089,7 +1089,9 @@ final class AppModel {
             "appVersion": Bundle.main.object(
                 forInfoDictionaryKey: "CFBundleShortVersionString"
             ) as? String ?? "unknown",
-            "sourceRevision": Bundle.main.object(forInfoDictionaryKey: "YumeSourceRevision") as? String ?? "local-unrecorded",
+            "sourceRevision": Self.buildMetadata["sourceRevision"] as? String ?? "local-unrecorded",
+            "sourceDirty": Self.buildMetadata["sourceDirty"] as? String ?? "unknown",
+            "builtAt": Self.buildMetadata["builtAt"] as? String ?? "unknown",
             "device": Self.deviceModel,
             "build": Bundle.main.object(
                 forInfoDictionaryKey: "CFBundleVersion"
@@ -1102,6 +1104,13 @@ final class AppModel {
             "process": ProcessInfo.processInfo.processName
         ]
     }
+
+    private static let buildMetadata: [String: Any] = {
+        guard let url = Bundle.main.url(forResource: "YumeBuildInfo", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return values
+    }()
 
     private static var deviceModel: String {
         var info = utsname()

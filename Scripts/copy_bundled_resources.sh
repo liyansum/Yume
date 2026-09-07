@@ -17,6 +17,7 @@ fi
 
 destination_root="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
 mkdir -p "$destination_root"
+python3 "$script_dir/write_build_metadata.py" "$destination_root/YumeBuildInfo.json"
 for directory_name in Runtimes Ruby Assets.bundle; do
     source="$source_root/$directory_name"
     destination="$destination_root/$directory_name"
@@ -47,6 +48,7 @@ if [[ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" &&
 fi
 
 required_outputs=(
+    "$destination_root/YumeBuildInfo.json"
     "$destination_root/Runtimes/RenPyModern/base/main.py"
     "$destination_root/Runtimes/RenPyModern/base/lib/python3.12/site.pyc"
     "$destination_root/Runtimes/RenPyLegacy/base/main.py"

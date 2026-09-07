@@ -115,7 +115,10 @@ while IFS= read -r swift_source; do
     swift_sources+=("$swift_source")
 done < <(find YumeApp YumeCore/Sources YumeCore/Tests -type f -name '*.swift' | LC_ALL=C sort)
 "$swiftc_bin" -frontend -parse "${swift_sources[@]}"
-"$swift_bin" test --package-path YumeCore
+probe_test_root="$(mktemp -d "${TMPDIR:-/tmp}/yume-probes.XXXXXX")"
+trap 'rm -rf "$probe_test_root"' EXIT
+python3 Scripts/generate_runtime_probes.py --output "$probe_test_root/projects"
+YUME_TEST_PROBES_ROOT="$probe_test_root/projects" "$swift_bin" test --package-path YumeCore
 Scripts/test_provider_shutdown.sh
 node Scripts/test_web_runtime.js
 python3 Scripts/test_renpy_bootstrap.py

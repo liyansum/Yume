@@ -509,7 +509,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
             guard let url = navigationAction.request.url else {
                 decisionHandler(.cancel)
@@ -1075,6 +1075,7 @@ private nonisolated final class GameLocalStorageBridge: NSObject, WKScriptMessag
         self.values = Self.loadValues(from: saveFileURL)
     }
 
+    @MainActor
     func bootstrapScript() -> WKUserScript {
         let encodedValues = (try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])) ?? Data("{}".utf8)
         let json = String(decoding: encodedValues, as: UTF8.self)

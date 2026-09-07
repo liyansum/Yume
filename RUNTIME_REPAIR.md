@@ -37,7 +37,9 @@
 
 自动化入口：`Scripts/verify_pretest.sh`。包括 Swift 生命周期/异常创建/停止超时与导出/日记/损坏诊断回归，真实 C++ dispatcher 的阻塞 destructor 故障注入，实际 Web 脚本输入/Storage/错误/限流检查，Ren’Py 7/8 hook 行为检查，以及原生缓存内容失效检查。这些测试不加载真实游戏解释器。
 
-macOS workflow 按引擎指纹复用库，Aether ABI 改动必须重编；保存 xcresult/build.log 并将 commit/build 写入 App。文件时间不参与原生有效性判断。最终 IPA 的设备安装与签名由测试方完成。
+macOS workflow 按引擎指纹复用库，Aether ABI 改动必须重编；保存 xcresult/build.log/dSYM，并由资源构建阶段写入 YumeBuildInfo.json（commit、dirty 状态、build、时间）。打包前校验真实 App 的元数据、运行脚本与资源，避免 Xcode 忽略任意 INFOPLIST_KEY 自定义字段造成来源丢失。文件时间不参与原生有效性判断。最终 IPA 的设备安装与签名由测试方完成。
+
+`python3 Scripts/generate_runtime_probes.py` 在新的 `BuildArtifacts/RuntimeProbes/` 下生成 10 个自有最小项目、单独 ZIP、SHA-256 清单及 `device-results.csv`。覆盖 RGSS1/2/3、Ren’Py7/8、ONS、Kirikiri、Artemis、Flash AVM1 和 Web 宿主。10 包均经过真实 ZIP 导入/识别/入口解析回归；RGSS 数据表经 Ruby Marshal.load + Ruby 语法检查。画面/输入/音频仍未真机验证。CI 同时上传 `Yume-device-probes-<build>` 方便与对应 IPA 配对。Web 包仅路由到 Tyrano 宿主，不包含 MV/MZ/Tyrano 商业或上游引擎；Flash 包也不能代表 AVM2 兼容性。生成物不随 App 内置。
 
 每个引擎分别完成以下步骤，并保留同一构建对应的诊断导出：
 
@@ -51,3 +53,7 @@ macOS workflow 按引擎指纹复用库，Aether ABI 改动必须重编；保存
 Ref 中 Spark、XP3Player、ONSPlayer/iONSPlayer、RPGPlayer/RPGViewer、YuriGame 用于核对进程布局、入口参数、资源和输入策略。部分参考 App 通过独立 executable/framework 隔离 Python/Ruby/SDL；其反编译实现不是当前单进程 C ABI 的可直接替换件。本轮在 Yume 自有宿主及已锁定上游中修复对应行为，未把参考 App 的二进制、商业素材或解包资源加入项目。
 
 上游接口依据：[Ren’Py 8 draw_screen](https://github.com/renpy/renpy/blob/8.5.3.26051504/renpy/display/core.py)、[Ren’Py 7 draw_screen](https://github.com/renpy/renpy/blob/7.8.7.25031702/renpy/display/core.py)、[锁定 Ruffle Storage 后端](https://github.com/ruffle-rs/ruffle/blob/a4f5b5256e245693bc9077ef6c6b6abc95490e7f/web/src/storage.rs)、[Ruffle networking 配置](https://github.com/ruffle-rs/ruffle/blob/a4f5b5256e245693bc9077ef6c6b6abc95490e7f/web/packages/core/src/public/config/load-options.ts)。构建版本与其余上游位置以依赖锁为准。
+
+## 已完成的构建核验
+
+`628dbd6` 的 run `34068652358` / build 55 已通过 macOS 预检、Aether 重编、宿主编译及 IPA 打包。包内 Web/Ren’Py/Ruffle 文件与源码逐字节一致，新增 shutdown 符号存在。核验同时发现自定义 Info 字段缺失，因此后续改用独立构建元数据并新增产物门禁；build 55 不是最终诊断测试包。macOS 使用不区分大小写的磁盘，跳过一项需要同时存在大小写冲突文件的测试；该项在 Linux 通过。检查编译警告还修正了 WebKit 导航回调的 MainActor/Sendable 签名和存档注入脚本的 MainActor 标记。Linux 当前 141 项 Swift 测试通过（含 10 个生成项目的导入），真实 localForage 库的 driver/createInstance/重启存档往返额外验证通过。
