@@ -135,30 +135,65 @@ public actor LocalAppLogStore {
     public func makeExport(additionalLogFiles: [URL] = []) throws -> URL {
         try prepareDirectory(exportDirectoryURL)
         let exportURL = exportDirectoryURL.appendingPathComponent(
-            "Yume-App-Logs-\(Self.filenameTimestamp(Date())).txt"
+            "Yume-Diagnostics-\(Self.filenameTimestamp(Date()))-\(UUID().uuidString.prefix(8)).txt"
         )
-        var output = Data("Yume App Logs\nGenerated: \(Self.displayTimestamp(Date()))\n\n".utf8)
+        // Stream the export: accumulating every game's logs in Data can cause
+        // the very memory termination a tester is trying to report.
+        let header = Data("Yume Diagnostics\nGenerated: \(Self.displayTimestamp(Date()))\nNewest files first; at most 8 MiB per file and 64 MiB total.\n\n".utf8)
+        try header.write(to: exportURL, options: .atomic)
+        let output = try FileHandle(forWritingTo: exportURL)
+        defer { try? output.close() }
+        try output.seekToEnd()
         let primaryLogs = try logs().map(\.url)
         var seenPaths: Set<String> = []
-        let sources = (primaryLogs + additionalLogFiles)
-            .filter { seenPaths.insert($0.standardizedFileURL.path).inserted }
-            .sorted { $0.path < $1.path }
-        for source in sources {
-            let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values?.isRegularFile == true else { continue }
-            let maximumIncludedBytes = 8 * 1_024 * 1_024
-            guard let handle = try? FileHandle(forReadingFrom: source) else { continue }
-            defer { try? handle.close() }
-            let size = max(0, values?.fileSize ?? 0)
-            let offset = max(0, size - maximumIncludedBytes)
-            if offset > 0 { try? handle.seek(toOffset: UInt64(offset)) }
-            let data = (try? handle.readToEnd()) ?? Data()
-            output.append(Data("===== \(source.lastPathComponent) (last \(data.count) bytes) =====\n".utf8))
-            output.append(data)
-            if data.last != 0x0A { output.append(0x0A) }
-            output.append(0x0A)
+        var sourceSnapshots: [(url: URL, modified: Date)] = []
+        for url in primaryLogs + additionalLogFiles {
+            guard seenPaths.insert(url.standardizedFileURL.path).inserted else { continue }
+            // Snapshot once: native logs may still be changing while we
+            // export, and a sort comparator must remain consistent.
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+            sourceSnapshots.append((url, values?.contentModificationDate ?? .distantPast))
         }
-        try output.write(to: exportURL, options: [.atomic])
+        sourceSnapshots.sort {
+            if $0.modified == $1.modified { return $0.url.path < $1.url.path }
+            return $0.modified > $1.modified
+        }
+        let sources = sourceSnapshots.map(\.url)
+        var remaining = 64 * 1_024 * 1_024
+        for source in sources {
+            guard remaining > 0 else {
+                try output.write(contentsOf: Data("[Export limit reached; older files omitted]\n".utf8))
+                break
+            }
+            let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+            let label: String
+            if let range = source.path.range(of: "/Games/") {
+                label = String(source.path[range.lowerBound...])
+            } else {
+                label = source.deletingLastPathComponent().lastPathComponent + "/" + source.lastPathComponent
+            }
+            guard let input = try? FileHandle(forReadingFrom: source) else {
+                try output.write(contentsOf: Data("[Unreadable: \(label)]\n".utf8))
+                continue
+            }
+            defer { try? input.close() }
+            let size = max(0, values?.fileSize ?? 0)
+            let count = min(size, min(8 * 1_024 * 1_024, remaining))
+            let offset = size - count
+            try input.seek(toOffset: UInt64(offset))
+            try output.write(contentsOf: Data("===== \(label) (bytes \(offset)..<\(size), total \(size)) =====\n".utf8))
+            var unread = count
+            while unread > 0 {
+                let data = try input.read(upToCount: min(64 * 1_024, unread)) ?? Data()
+                guard !data.isEmpty else { break }
+                try output.write(contentsOf: data)
+                unread -= data.count
+                remaining -= data.count
+            }
+            try output.write(contentsOf: Data("\n\n".utf8))
+        }
+        try output.synchronize()
         return exportURL
     }
 

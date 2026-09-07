@@ -1617,7 +1617,10 @@ struct Runtime::Impl final : EmbeddedMovieHost {
                        std::to_string(stop_requested.load() ? 1 : 0));
             ended.store(true);
             game_open.store(false);
-            if (host_exit.code == 0 || stop_requested.load()) {
+            if (startup.load() == StartupState::Running) {
+                set_error("ONS script exited before startup completed (code " +
+                          std::to_string(host_exit.code) + ")");
+            } else if (host_exit.code == 0 || stop_requested.load()) {
                 append_log("[ONScripter Yuri] runtime requested termination");
             } else {
                 set_error("runtime terminated with exit code " +

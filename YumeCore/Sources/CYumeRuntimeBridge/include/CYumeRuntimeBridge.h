@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 #define YUME_RUNTIME_ABI_VERSION 2u
+#define YUME_RUNTIME_ERROR_RESTART_REQUIRED (-10)
 
 typedef struct YumeRuntimeSession YumeRuntimeSession;
 
@@ -74,6 +75,9 @@ typedef void (*YumeRuntimeEventCallback)(
 /// Provider ABI implemented by each statically linked upstream adapter.
 /// Every path must be copied during create; the host's UTF-8 buffers are
 /// intentionally valid only for the duration of that call.
+/// create must not start the engine loop. On failure, leave provider_session
+/// null or return an owner that destroy can synchronously clean up. destroy
+/// must detach all callbacks before returning, even after a stop timeout.
 typedef struct YumeRuntimeProviderAPI {
     uint32_t abi_version;
     const char *identifier;

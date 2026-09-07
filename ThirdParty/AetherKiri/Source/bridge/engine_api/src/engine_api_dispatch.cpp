@@ -1,6 +1,7 @@
 #include "engine_api.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cstring>
@@ -65,6 +66,9 @@ struct DispatchHandle {
   engine_runtime_host_v1_t host{};
   engine_runtime_fragment_shader_host_v1_t fragment_shader_host{};
   std::thread startup_thread;
+  std::thread shutdown_thread;
+  bool shutdown_requested = false;
+  std::atomic<bool> shutdown_complete{false};
   uint32_t startup_state = ENGINE_STARTUP_STATE_IDLE;
   std::deque<std::string> startup_logs;
   struct PlatformRequest {
@@ -334,6 +338,7 @@ engine_result_t Route(engine_handle_t public_handle, const char* operation,
   auto result = ValidateHandleLocked(public_handle, &handle);
   if (result != ENGINE_RESULT_OK) return result;
   std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  if (handle->shutdown_requested) return ENGINE_RESULT_INVALID_STATE;
   if (handle->backend != BackendKind::kProvider) {
     return legacy_call(handle->legacy);
   }
@@ -532,6 +537,46 @@ engine_result_t engine_submit_platform_response(
   return result;
 }
 
+engine_result_t engine_begin_shutdown(engine_handle_t public_handle) {
+  std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
+  DispatchHandle* handle = nullptr;
+  const auto result = ValidateHandleLocked(public_handle, &handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  if (handle->backend != BackendKind::kProvider) return ENGINE_RESULT_NOT_SUPPORTED;
+  if (handle->shutdown_requested) return ENGINE_RESULT_OK;
+  handle->shutdown_requested = true;
+  try {
+    handle->shutdown_thread = std::thread([handle]() {
+      // open_game may still be using the provider. Keep both it and the
+      // dispatch handle alive through teardown; polling never waits here.
+      if (handle->startup_thread.joinable()) handle->startup_thread.join();
+      if (handle->provider != nullptr && handle->runtime != nullptr) {
+        handle->provider->destroy(handle->runtime);
+        handle->runtime = nullptr;
+      }
+      handle->shutdown_complete.store(true, std::memory_order_release);
+    });
+  } catch (...) {
+    handle->shutdown_requested = false;
+    return ENGINE_RESULT_INTERNAL_ERROR;
+  }
+  return ENGINE_RESULT_OK;
+}
+
+engine_result_t engine_poll_shutdown(engine_handle_t public_handle, uint32_t* out_complete) {
+  if (out_complete == nullptr) return ENGINE_RESULT_INVALID_ARGUMENT;
+  *out_complete = 0;
+  std::lock_guard<std::recursive_mutex> registry_guard(g_dispatch_registry_mutex);
+  DispatchHandle* handle = nullptr;
+  const auto result = ValidateHandleLocked(public_handle, &handle);
+  if (result != ENGINE_RESULT_OK) return result;
+  std::lock_guard<std::recursive_mutex> guard(handle->mutex);
+  if (!handle->shutdown_requested) return ENGINE_RESULT_INVALID_STATE;
+  *out_complete = handle->shutdown_complete.load(std::memory_order_acquire) ? 1 : 0;
+  return ENGINE_RESULT_OK;
+}
+
 engine_result_t engine_destroy(engine_handle_t public_handle) {
   if (public_handle == nullptr) {
     SetThreadError(nullptr);
@@ -546,6 +591,9 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
       return ThreadError(ENGINE_RESULT_INVALID_ARGUMENT,
                          "engine handle is invalid or already destroyed");
     }
+    handle = Cast(public_handle);
+    if (handle->shutdown_requested && !handle->shutdown_complete.load(std::memory_order_acquire))
+      return ENGINE_RESULT_INVALID_STATE;
     for (auto media = g_dispatch_media_handles.begin();
          media != g_dispatch_media_handles.end();) {
       if (media->second == public_handle) {
@@ -564,6 +612,7 @@ engine_result_t engine_destroy(engine_handle_t public_handle) {
     std::lock_guard<std::recursive_mutex> guard(handle->mutex);
     startup_thread = std::move(handle->startup_thread);
   }
+  if (handle->shutdown_thread.joinable()) handle->shutdown_thread.join();
   if (startup_thread.joinable()) startup_thread.join();
   if (handle->provider != nullptr && handle->runtime != nullptr) {
     handle->provider->destroy(handle->runtime);

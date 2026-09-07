@@ -351,6 +351,42 @@ def main():
     # Set renpy.__main__ to this module.
     renpy.__main__ = sys.modules[__name__] # type: ignore
 
+    # Yume observes the pinned 7.8/8.5 Interface.draw_screen return, which
+    # follows renderer submission. A UIWindow alone does not prove a frame.
+    _yume_original_import_all = renpy.import_all
+    def _yume_import_all():
+        result = _yume_original_import_all()
+        renpy.import_all = _yume_original_import_all
+        interface = renpy.display.core.Interface
+        original_draw = interface.draw_screen
+        reported = [False]
+        def _yume_draw_screen(self, root_widget, fullscreen_video, draw):
+            result = original_draw(self, root_widget, fullscreen_video, draw)
+            if draw and not reported[0]:
+                reported[0] = True
+                try:
+                    logdir = os.environ.get("RENPY_LOGDIR")
+                    if logdir:
+                        marker = os.path.join(logdir, "renpy-first-frame.txt")
+                        with open(marker, "w") as output:
+                            output.write("renderer-submitted %sx%s\n" % (
+                                renpy.config.screen_width, renpy.config.screen_height))
+                            output.flush()
+                            os.fsync(output.fileno())
+                    _yume_log("first-frame", width=renpy.config.screen_width,
+                              height=renpy.config.screen_height)
+                except Exception as error:
+                    # Diagnostics cannot turn a successfully drawn game into
+                    # a script exception (e.g. the device just ran out of space).
+                    try:
+                        _yume_log("first-frame-marker.failed", error=error)
+                    except Exception:
+                        pass
+            return result
+        interface.draw_screen = _yume_draw_screen
+        return result
+    renpy.import_all = _yume_import_all
+
     _yume_log("bootstrap.call.begin", renpy_base=renpy_base)
     try:
         renpy.bootstrap.bootstrap(renpy_base)

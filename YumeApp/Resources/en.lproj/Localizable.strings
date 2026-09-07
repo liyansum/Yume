@@ -87,7 +87,8 @@
 "player.error.title" = "Unable to Start Game";
 "player.error.message" = "This game does not have a runnable entry point in the installed runtime.";
 "player.loadFailure.title" = "Game Could Not Load";
-"player.loadFailure.message" = "Yume stopped the local player because a required resource could not be loaded.";
+"player.loadFailure.message" = "Yume could not start or continue this game. Close the player and export diagnostics from Settings for the failure details.";
+"player.restartRequired.message" = "This runtime cannot safely start another session yet. Fully quit Yume and reopen it before trying again. If this repeats, export diagnostics from Settings.";
 "game.saves.title" = "Save Data";
 "game.saves.export" = "Prepare Save Export";
 "game.saves.share" = "Share Save Package";

@@ -13,6 +13,7 @@ struct GamePlayerView: View {
     let onLog: (_ message: String, _ isError: Bool, _ metadata: [String: String]) -> Void
 
     @State private var loadFailed = false
+    @State private var restartRequired = false
     @State private var inputCommand: WebInputCommand?
     @AppStorage("controls.virtual.enabled") private var virtualControlsEnabled = true
     @AppStorage("controls.haptics.enabled") private var hapticsEnabled = true
@@ -38,16 +39,16 @@ struct GamePlayerView: View {
                 ContentUnavailableView(
                     "player.loadFailure.title",
                     systemImage: "exclamationmark.triangle",
-                    description: Text("player.loadFailure.message")
+                    description: Text(LocalizedStringKey(restartRequired ? "player.restartRequired.message" : "player.loadFailure.message"))
                 )
                 .foregroundStyle(.white)
                 .padding()
             }
 
             if showsVirtualControls {
-                GameVirtualControls { keyCode in
-                    inputCommand = WebInputCommand(keyCode: keyCode)
-                    if hapticsEnabled {
+                GameVirtualControls { keyCode, pressed in
+                    inputCommand = WebInputCommand(keyCode: keyCode, pressed: pressed)
+                    if pressed && hapticsEnabled {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 }
@@ -85,13 +86,20 @@ struct GamePlayerView: View {
     }
 
     private var showsVirtualControls: Bool {
-        guard virtualControlsEnabled, !loadFailed else { return false }
+        guard virtualControlsEnabled, !loadFailed, !suspended else { return false }
         switch session.launchPlan.kind {
         case .web, .embeddedWebRuntime, .hostedRuntime:
             return true
         default:
             return false
         }
+    }
+
+    private func recordRuntimeLog(_ message: String, _ isError: Bool, _ metadata: [String: String]) {
+        if metadata["requiresRestart"] == "true" || metadata["code"] == "runtime.stop-timeout" {
+            restartRequired = true
+        }
+        onLog(message, isError, metadata)
     }
 
     @ViewBuilder
@@ -103,7 +111,7 @@ struct GamePlayerView: View {
                     mode: .game,
                     suspended: suspended,
                     inputCommand: inputCommand,
-                    onLog: onLog,
+                    onLog: recordRuntimeLog,
                     loadFailed: $loadFailed
             )
         case let .embeddedWebRuntime(runtimeIdentifier):
@@ -115,7 +123,7 @@ struct GamePlayerView: View {
                     mode: .ruffle(runtimeRoot: runtimeRoot, movie: movie),
                     suspended: suspended,
                     inputCommand: inputCommand,
-                    onLog: onLog,
+                    onLog: recordRuntimeLog,
                     loadFailed: $loadFailed
                 )
             } else {
@@ -127,7 +135,7 @@ struct GamePlayerView: View {
                 runtimeIdentifier: runtimeIdentifier,
                 suspended: suspended,
                 inputCommand: inputCommand,
-                onLog: onLog,
+                onLog: recordRuntimeLog,
                 loadFailed: $loadFailed
             )
         case .notPlanned:
@@ -183,6 +191,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.defaultWebpagePreferences.preferredContentMode = .mobile
         configuration.preferences.isElementFullscreenEnabled = true
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -194,7 +203,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             diagnosticsBridge,
             name: WebDiagnosticsBridge.messageName
         )
-        configuration.userContentController.addUserScript(diagnosticsBridge.bootstrapScript())
+        configuration.userContentController.addUserScript(diagnosticsBridge.bootstrapScript(engineID: location.game.engine.id.rawValue))
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
@@ -228,13 +237,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
 
         guard let inputCommand, context.coordinator.lastInputCommandID != inputCommand.id else { return }
         context.coordinator.lastInputCommandID = inputCommand.id
-        let script = """
-        (() => {
-          const options = {keyCode: \(inputCommand.keyCode), which: \(inputCommand.keyCode), bubbles: true};
-          document.dispatchEvent(new KeyboardEvent("keydown", options));
-          document.dispatchEvent(new KeyboardEvent("keyup", options));
-        })();
-        """
+        let script = "window.__yumeSetKey?.(\(inputCommand.keyCode), \(inputCommand.pressed ? "true" : "false"));"
         context.coordinator.sendInput(script, keyCode: inputCommand.keyCode, webView: webView)
     }
 
@@ -242,6 +245,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
+        webView.evaluateJavaScript("window.dispatchEvent(new Event('pagehide'));")
         coordinator.stopLocalServer()
     }
 
@@ -277,10 +281,12 @@ private struct RestrictedWebGameView: UIViewRepresentable {
             webMessageCount += 1
             let isError = kind == "error"
                 || kind == "unhandled-rejection"
-                || kind == "console-error"
+                || kind == "console-error" || kind == "resource-error"
+                || kind == "context-lost" || kind == "storage-error"
             var values = details
             values["sequence"] = String(webMessageCount)
-            onLog("web.\(kind)", isError, metadata(values, message: message))
+            onLog("web.\(kind)", isError || kind == "runtime-failed", metadata(values, message: message))
+            if kind == "runtime-failed" { loadFailed = true }
         }
 
         func handleResourceError(_ message: String, path: String) {
@@ -402,6 +408,7 @@ private struct RestrictedWebGameView: UIViewRepresentable {
         }
 
         func stopLocalServer() {
+            onLog("web.stopped", false, baseMetadata)
             localServer?.stop()
             localServer = nil
             allowedOrigin = nil
@@ -431,7 +438,8 @@ private struct RestrictedWebGameView: UIViewRepresentable {
                 encodedContentRuleList: rules
             ) { [weak self, weak webView] ruleList, error in
                 Task { @MainActor in
-                    guard let self, let webView, error == nil, let ruleList else {
+                    guard let self, let webView, self.hostedWebView === webView,
+                          self.localServer != nil, error == nil, let ruleList else {
                         if let self {
                             self.onLog(
                                 "web.network-policy-failed",
@@ -678,6 +686,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                 logRootURL: content.logRootURL,
                 rtpMountRoots: playSession.rtpMountRoots
             )
+            onLog("native.create-requested", false, ["runtime": runtimeIdentifier])
             let runtime = try NativeRuntimeSession(
                 runtimeIdentifier: runtimeIdentifier,
                 game: prepared,
@@ -694,12 +703,14 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                 true,
                 [
                     "error": String(describing: error),
+                    "requiresRestart": (error as? NativeRuntimeHostError) == .processRequiresRestart ? "true" : "false",
                     "runtime": runtimeIdentifier,
                     "gameID": playSession.content.game.id.rawValue.uuidString,
                     "engine": playSession.content.game.engine.id.rawValue
                 ]
             )
             loadFailed = true
+            onLog("native.released", false, ["reason": "creation-failed"])
         }
         return container
     }
@@ -711,7 +722,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
               let action = inputCommand.nativeAction
         else { return }
         context.coordinator.lastInputCommandID = inputCommand.id
-        context.coordinator.sendTap(action)
+        context.coordinator.sendButton(action, pressed: inputCommand.pressed)
     }
 
     static func dismantleUIView(_ view: UIView, coordinator: Coordinator) {
@@ -753,7 +764,10 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             guard let gameView = runtime.nativeView() else {
                 onLog("native.view-unavailable", true, baseMetadata)
                 loadFailed = true
-                Task { await runtime.stop() }
+                Task {
+                    await runtime.stop()
+                    onLog("native.released", false, baseMetadata)
+                }
                 self.runtime = nil
                 return
             }
@@ -779,8 +793,15 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                         onLog("native.resumed", false, baseMetadata)
                     case .stopped:
                         onLog("native.stopped", false, baseMetadata)
+                        if self.runtime != nil {
+                            if !receivedFirstFrame {
+                                onLog("native.exited-before-first-frame", true, baseMetadata)
+                                loadFailed = true
+                            }
+                            stopRuntimeAfterFailure()
+                        }
                     case let .warning(code):
-                        onLog("native.warning", false, metadata(["code": code]))
+                        onLog("native.warning", code == "runtime.stop-timeout", metadata(["code": code]))
                     case let .failed(code):
                         onLog("native.failed", true, metadata(["code": code]))
                         loadFailed = true
@@ -804,7 +825,10 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             }
             startTask = Task { @MainActor [weak self] in
                 do {
+                    guard !Task.isCancelled else { return }
+                    self?.onLog("native.start-requested", false, self?.baseMetadata ?? [:])
                     try await runtime.start()
+                    if self?.isSuspended == true { await runtime.pause() }
                 } catch {
                     self?.onLog(
                         "native.start-threw",
@@ -817,7 +841,14 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
                 }
                 guard let self, self.runtime != nil else { return }
                 firstFrameWatchdog = Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(60))
+                    // Background time is not startup time: a locked phone
+                    // must not fail a game that correctly suspended rendering.
+                    var activeSeconds = 0
+                    while activeSeconds < 60 {
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        guard let self, !receivedFirstFrame else { return }
+                        if !isSuspended { activeSeconds += 1 }
+                    }
                     guard let self, !Task.isCancelled, !receivedFirstFrame else { return }
                     onLog("native.first-frame-timeout", true, baseMetadata)
                     loadFailed = true
@@ -829,32 +860,32 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
         func setSuspended(_ suspended: Bool) {
             guard suspended != isSuspended, let runtime else { return }
             isSuspended = suspended
+            if suspended { releaseButtons() }
             Task {
                 if suspended { await runtime.pause() } else { await runtime.resume() }
             }
         }
 
-        func sendTap(_ action: EngineInputAction) {
+        private var heldActions: Set<EngineInputAction> = []
+
+        func sendButton(_ action: EngineInputAction, pressed: Bool) {
+            guard let runtime, !isSuspended || !pressed else { return }
+            if pressed { heldActions.insert(action) } else { heldActions.remove(action) }
+            Task { await runtime.send(.button(action: action, pressed: pressed)) }
+        }
+
+        private func releaseButtons() {
             guard let runtime else { return }
+            let actions = heldActions
+            heldActions.removeAll()
             Task {
-                await runtime.send(.button(action: action, pressed: true))
-                try? await Task.sleep(for: .milliseconds(50))
-                await runtime.send(.button(action: action, pressed: false))
+                for action in actions { await runtime.send(.button(action: action, pressed: false)) }
             }
         }
 
         func stop() {
-            eventTask?.cancel()
-            eventTask = nil
-            logTask?.cancel()
-            logTask = nil
-            startTask?.cancel()
-            startTask = nil
-            firstFrameWatchdog?.cancel()
-            firstFrameWatchdog = nil
-            guard let runtime else { return }
-            self.runtime = nil
-            Task { await runtime.stop() }
+            releaseButtons()
+            stopRuntimeAfterFailure()
         }
 
         private func stopRuntimeAfterFailure() {
@@ -864,7 +895,19 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
             startTask = nil
             guard let runtime else { return }
             self.runtime = nil
-            Task { await runtime.stop() }
+            let events = eventTask
+            let logs = logTask
+            // Drain the streams through provider stop/destroy. Cancelling
+            // here used to discard stop-timeout and cleanup diagnostics.
+            Task {
+                onLog("native.stop-requested", false, baseMetadata)
+                await runtime.stop()
+                await events?.value
+                await logs?.value
+                onLog("native.released", false, baseMetadata)
+                eventTask = nil
+                logTask = nil
+            }
         }
 
         private func metadata(_ additional: [String: String]) -> [String: String] {
@@ -878,6 +921,7 @@ private struct NativeRuntimePlayerView: UIViewRepresentable {
 private struct WebInputCommand: Equatable {
     let id = UUID()
     let keyCode: Int
+    let pressed: Bool
 
     var nativeAction: EngineInputAction? {
         switch keyCode {
@@ -914,7 +958,7 @@ private final class WebDiagnosticsBridge: NSObject, WKScriptMessageHandler {
         for key in [
             "source", "line", "column", "stack", "readyState",
             "bodyChildren", "canvasCount", "imageCount", "userAgent",
-            "viewport", "screen"
+            "viewport", "screen", "sequence", "scene", "sceneReady", "firstDraw"
         ] {
             if let value = body[key] {
                 metadata[key] = String(String(describing: value).prefix(4_000))
@@ -923,82 +967,22 @@ private final class WebDiagnosticsBridge: NSObject, WKScriptMessageHandler {
         onMessage(kind, detail, metadata)
     }
 
-    func bootstrapScript() -> WKUserScript {
-        WKUserScript(
-            source: """
-            (() => {
-              const bridge = window.webkit?.messageHandlers?.yumeDiagnostics;
-              if (!bridge || window.__yumeDiagnosticsInstalled) return;
-              window.__yumeDiagnosticsInstalled = true;
-              const text = value => {
-                try {
-                  if (value instanceof Error) return value.stack || value.message || String(value);
-                  if (typeof value === "string") return value;
-                  return JSON.stringify(value);
-                } catch (_) { return String(value); }
-              };
-              const send = payload => {
-                try {
-                  for (const key of Object.keys(payload)) payload[key] = text(payload[key]).slice(0, 4000);
-                  bridge.postMessage(payload);
-                } catch (_) {}
-              };
-              for (const level of ["log", "info", "warn", "error", "debug"]) {
-                const original = console[level]?.bind(console);
-                console[level] = (...args) => {
-                  send({kind: `console-${level}`, message: args.map(text).join(" ")});
-                  if (original) original(...args);
-                };
-              }
-              window.addEventListener("error", event => send({
-                kind: "error",
-                message: event.message || "Script error",
-                source: event.filename || "",
-                line: event.lineno || 0,
-                column: event.colno || 0,
-                stack: event.error?.stack || ""
-              }));
-              window.addEventListener("unhandledrejection", event => send({
-                kind: "unhandled-rejection",
-                message: text(event.reason),
-                stack: event.reason?.stack || ""
-              }));
-              document.addEventListener("DOMContentLoaded", () => send({
-                kind: "dom-content-loaded",
-                message: location.href,
-                readyState: document.readyState,
-                bodyChildren: document.body?.children.length ?? -1
-              }), {once: true});
-              window.addEventListener("load", () => send({
-                kind: "window-loaded",
-                message: location.href,
-                readyState: document.readyState,
-                canvasCount: document.querySelectorAll("canvas").length,
-                imageCount: document.images.length
-              }), {once: true});
-              document.addEventListener("visibilitychange", () => send({
-                kind: "visibility-changed",
-                message: document.visibilityState,
-                readyState: document.readyState
-              }));
-              send({
-                kind: "bridge-ready",
-                message: location.href,
-                readyState: document.readyState,
-                userAgent: navigator.userAgent,
-                viewport: `${innerWidth}x${innerHeight}@${devicePixelRatio}`,
-                screen: `${screen.width}x${screen.height}`
-              });
-            })();
-            """,
+    func bootstrapScript(engineID: String) -> WKUserScript {
+        let engine = (try? JSONEncoder().encode(engineID)) ?? Data("\"unknown\"".utf8)
+        let source = Bundle.main.url(forResource: "WebRuntimeSupport", withExtension: "js")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+            ?? "console.error('Yume WebRuntimeSupport.js missing');"
+        return WKUserScript(
+            source: "window.__yumeEngineID = \(String(decoding: engine, as: UTF8.self));\n" + source,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: false
         )
     }
+
 }
 
 private struct GameVirtualControls: View {
-    let send: (Int) -> Void
+    let send: (Int, Bool) -> Void
 
     var body: some View {
         VStack {
@@ -1033,19 +1017,45 @@ private struct GameVirtualControls: View {
         keyCode: Int,
         accessibilityKey: LocalizedStringKey
     ) -> some View {
-        Button {
-            send(keyCode)
-        } label: {
-            Image(systemName: symbol)
-                .font(.title3.bold())
-                .frame(width: 50, height: 50)
-                .background(.ultraThinMaterial, in: Circle())
+        GameControlButton(symbol: symbol, accessibilityKey: accessibilityKey) { pressed in
+            send(keyCode, pressed)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.primary)
-        .frame(minWidth: 44, minHeight: 44)
-        .contentShape(Circle())
-        .accessibilityLabel(accessibilityKey)
+    }
+}
+
+private struct GameControlButton: View {
+    let symbol: String
+    let accessibilityKey: LocalizedStringKey
+    let send: (Bool) -> Void
+    @State private var held = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.title3.bold())
+            .frame(width: 50, height: 50)
+            .background(.ultraThinMaterial, in: Circle())
+            .foregroundStyle(.primary)
+            .contentShape(Circle())
+            .opacity(held ? 0.6 : 1)
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in setHeld(true) }
+                .onEnded { _ in setHeld(false) })
+            .onDisappear { setHeld(false) }
+            .accessibilityLabel(accessibilityKey)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                Task { @MainActor in
+                    setHeld(true)
+                    try? await Task.sleep(for: .milliseconds(80))
+                    setHeld(false)
+                }
+            }
+    }
+
+    private func setHeld(_ value: Bool) {
+        guard held != value else { return }
+        held = value
+        send(value)
     }
 }
 
@@ -1070,7 +1080,7 @@ private nonisolated final class GameLocalStorageBridge: NSObject, WKScriptMessag
         let json = String(decoding: encodedValues, as: UTF8.self)
         let source = """
         (() => {
-          const values = \(json);
+          const values = Object.assign(Object.create(null), \(json));
           const keys = () => Object.keys(values);
           const utf8Length = value => new TextEncoder().encode(value).length;
           const persist = message => {
@@ -1106,7 +1116,21 @@ private nonisolated final class GameLocalStorageBridge: NSObject, WKScriptMessag
               window.webkit.messageHandlers.\(Self.messageName).postMessage({op: "clear"});
             }
           };
-          Object.defineProperty(window, "localStorage", {value: storage, configurable: false});
+          const proxy = new Proxy(storage, {
+            get(target, key) {
+              if (key in target || typeof key === "symbol") return Reflect.get(target, key);
+              return target.getItem(key) ?? undefined;
+            },
+            set(target, key, value) { target.setItem(key, value); return true; },
+            deleteProperty(target, key) { target.removeItem(key); return true; },
+            ownKeys() { return keys(); },
+            has(target, key) { return key in target || Object.prototype.hasOwnProperty.call(values, key); },
+            getOwnPropertyDescriptor(target, key) {
+              if (Object.prototype.hasOwnProperty.call(values, key))
+                return {value: values[key], enumerable: true, configurable: true, writable: true};
+            }
+          });
+          Object.defineProperty(window, "localStorage", {value: proxy, configurable: false});
         })();
         """
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: false)

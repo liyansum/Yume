@@ -31,9 +31,15 @@ public actor LocalDiagnosticStore: DiagnosticStore {
         if !fileManager.fileExists(atPath: current.path) {
             try data.write(to: current, options: [.atomic])
         } else {
-            let handle = try FileHandle(forWritingTo: current)
+            let handle = try FileHandle(forUpdating: current)
             defer { try? handle.close() }
-            try handle.seekToEnd()
+            let end = try handle.seekToEnd()
+            if end > 0 {
+                try handle.seek(toOffset: end - 1)
+                let last = try handle.read(upToCount: 1)
+                try handle.seekToEnd()
+                if last?.last != 0x0A { try handle.write(contentsOf: Data([0x0A])) }
+            }
             try handle.write(contentsOf: data)
             try handle.synchronize()
         }
@@ -41,18 +47,23 @@ public actor LocalDiagnosticStore: DiagnosticStore {
 
     public func recentEntries(limit: Int) async throws -> [DiagnosticEntry] {
         try prepareDirectory()
-        guard limit > 0, fileManager.fileExists(atPath: currentLogURL.path) else { return [] }
-        let data = try Data(contentsOf: currentLogURL, options: [.mappedIfSafe])
-        return try data.split(separator: 0x0A)
-            .suffix(limit)
-            .reversed()
-            .map { line in
-                do {
-                    return try decoder().decode(DiagnosticEntry.self, from: Data(line))
-                } catch {
-                    throw StoreError.invalidLogEntry
+        guard limit > 0 else { return [] }
+        var entries: [DiagnosticEntry] = []
+        // A process can die between a JSONL write and its newline. Preserve
+        // valid entries and continue into rotations instead of failing the
+        // entire diagnostics screen on the one damaged line we need to inspect.
+        for url in [currentLogURL] + (1...Self.maximumArchiveCount).map(archivedLogURL) {
+            guard entries.count < limit, fileManager.fileExists(atPath: url.path) else { continue }
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            for line in data.split(separator: 0x0A).reversed() {
+                if let entry = try? decoder().decode(DiagnosticEntry.self, from: Data(line)) {
+                    entries.append(entry)
+                    if entries.count == limit { break }
                 }
             }
+        }
+        return entries
+
     }
 
     public func makeExport() async throws -> URL {

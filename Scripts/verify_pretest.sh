@@ -13,7 +13,7 @@ if [[ -z "$swiftc_bin" && -x /opt/yume-swift/usr/bin/swiftc ]]; then
     swiftc_bin=/opt/yume-swift/usr/bin/swiftc
 fi
 
-for command_name in python3 git; do
+for command_name in python3 git node; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "Required command is unavailable: $command_name" >&2
         exit 2
@@ -32,6 +32,7 @@ if ! "$swift_bin" --version | grep -Eq 'Swift version 6\.|Swift version 7\.'; th
 fi
 
 required_resources=(
+    YumeApp/Resources/WebRuntimeSupport.js
     ThirdParty/BundledResources/Runtimes/AetherKiri/default.otf
     ThirdParty/BundledResources/Runtimes/RenPyModern/base/main.py
     ThirdParty/BundledResources/Runtimes/RenPyModern/base/environment.txt
@@ -115,6 +116,10 @@ while IFS= read -r swift_source; do
 done < <(find YumeApp YumeCore/Sources YumeCore/Tests -type f -name '*.swift' | LC_ALL=C sort)
 "$swiftc_bin" -frontend -parse "${swift_sources[@]}"
 "$swift_bin" test --package-path YumeCore
+Scripts/test_provider_shutdown.sh
+node Scripts/test_web_runtime.js
+python3 Scripts/test_renpy_bootstrap.py
+python3 Scripts/test_native_runtime_fingerprints.py
 git diff --check
 
 echo "Yume pre-test verification passed."

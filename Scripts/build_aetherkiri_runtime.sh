@@ -50,11 +50,9 @@ build_root="$project_root/.native-build/aetherkiri/${platform_name}-${architectu
 vcpkg_root="${YUME_VCPKG_ROOT:-$project_root/.native-build/vcpkg}"
 vcpkg_downloads="${VCPKG_DOWNLOADS:-$project_root/.native-build/vcpkg-downloads}"
 
-if [[ -f "$artifact" ]] &&
-   ! find "$source_root" -type f -newer "$artifact" -print -quit | grep -q .; then
-    echo "AetherKiri runtime is up to date: $artifact"
-    exit 0
-fi
+# Content fingerprints in build_native_runtimes.sh decide cache reuse.
+# Restored archives retain timestamps that can be newer than changed source;
+# an mtime shortcut here would silently override that invalidation decision.
 
 # Xcode shell phases export the active iPhone SDK and target flags globally.
 # vcpkg also builds host tools (pkgconf, meson helpers) which must remain

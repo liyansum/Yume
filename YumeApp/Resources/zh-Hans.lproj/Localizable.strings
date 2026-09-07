@@ -87,7 +87,8 @@
 "player.error.title" = "无法启动游戏";
 "player.error.message" = "已安装的运行时无法为此游戏提供可运行的入口。";
 "player.loadFailure.title" = "游戏载入失败";
-"player.loadFailure.message" = "由于必要资源无法载入，Yume 已停止本地播放器。";
+"player.loadFailure.message" = "Yume 无法启动或继续运行此游戏。请关闭播放器，在“设置”中导出诊断以查看具体原因。";
+"player.restartRequired.message" = "当前运行时无法安全启动新的会话。请彻底退出 Yume 并重新打开后再试；如果反复出现，请在“设置”中导出诊断。";
 "game.saves.title" = "存档数据";
 "game.saves.export" = "准备导出存档";
 "game.saves.share" = "分享存档包";

@@ -265,6 +265,17 @@ ENGINE_API_EXPORT engine_result_t engine_create(const engine_create_desc_t* desc
  */
 ENGINE_API_EXPORT engine_result_t engine_destroy(engine_handle_t handle);
 
+/* Begin provider teardown without joining an interpreter on the UI thread.
+ * Returns NOT_SUPPORTED for the creator-thread-bound legacy Kirikiri runtime.
+ * After begin succeeds, only poll_shutdown and destroy are permitted. Keep
+ * the handle alive until out_complete becomes 1, then destroy on its creator
+ * thread to release the legacy shell. A stalled provider is never force-freed.
+ */
+ENGINE_API_EXPORT engine_result_t engine_begin_shutdown(engine_handle_t handle);
+ENGINE_API_EXPORT engine_result_t engine_poll_shutdown(engine_handle_t handle,
+                                                      uint32_t* out_complete);
+
+
 /*
  * Retrieves one platform operation emitted by a runtime provider. Requests
  * are queued across asynchronous startup and must be consumed on the host UI

@@ -527,24 +527,42 @@ static AVAudioPCMBuffer *DecodeAudioResource(Art3m1sSession *session,
         static_cast<const uint8_t *>(encoded.bytes), static_cast<Uint32>(encoded.length),
         extension.length > 0 ? extension.UTF8String : nullptr, &desired, 64 * 1024);
     if (sample == nullptr) return nil;
-    const Uint32 decodedBytes = Sound_DecodeAll(sample);
+    // Decode incrementally so malformed/very long resources cannot make
+    // SDL_sound grow an unbounded buffer before the host can inspect it.
+    constexpr NSUInteger maximumDecodedBytes = 64u * 1024u * 1024u;
+    NSMutableData *pcm = [NSMutableData data];
+    bool complete = false;
+    while ((sample->flags & SOUND_SAMPLEFLAG_ERROR) == 0) {
+        const Uint32 count = Sound_Decode(sample);
+        if (count > maximumDecodedBytes - pcm.length) {
+            AppendLog(session, YUME_RUNTIME_LOG_ERROR, "media.audio decoded-size-limit (64 MiB)");
+            break;
+        }
+        if (count > 0) [pcm appendBytes:sample->buffer length:count];
+        if ((sample->flags & SOUND_SAMPLEFLAG_EOF) != 0) { complete = true; break; }
+        if (count == 0) break;
+    }
     AVAudioPCMBuffer *result = nil;
-    if ((sample->flags & SOUND_SAMPLEFLAG_ERROR) == 0 && decodedBytes >= 4 &&
-        decodedBytes % 4 == 0 && sample->desired.format == AUDIO_S16SYS &&
+    if (complete && (sample->flags & SOUND_SAMPLEFLAG_ERROR) == 0 && pcm.length >= 4 &&
+        pcm.length % 4 == 0 && sample->desired.format == AUDIO_S16SYS &&
         sample->desired.channels == 2 && sample->desired.rate == 48000) {
+        // AVAudioEngine's mixer/player connection uses standard Float32,
+        // noninterleaved audio. Connecting the decoder's Int16 interleaved
+        // format can raise an AVAudioEngine format exception on iOS.
         AVAudioFormat *format = [[AVAudioFormat alloc]
-            initWithCommonFormat:AVAudioPCMFormatInt16 sampleRate:48000 channels:2
-                      interleaved:YES];
-        const AVAudioFrameCount frames = decodedBytes / 4;
+            initStandardFormatWithSampleRate:48000 channels:2];
+        const AVAudioFrameCount frames = static_cast<AVAudioFrameCount>(pcm.length / 4);
         result = [[AVAudioPCMBuffer alloc] initWithPCMFormat:format frameCapacity:frames];
         result.frameLength = frames;
-        AudioBufferList *buffers = result.mutableAudioBufferList;
-        if (buffers == nullptr || buffers->mNumberBuffers != 1 ||
-            buffers->mBuffers[0].mDataByteSize < decodedBytes) {
+        float *const *channels = result.floatChannelData;
+        if (channels == nullptr) {
             result = nil;
         } else {
-            memcpy(buffers->mBuffers[0].mData, sample->buffer, decodedBytes);
-            buffers->mBuffers[0].mDataByteSize = decodedBytes;
+            const int16_t *samples = static_cast<const int16_t *>(pcm.bytes);
+            for (AVAudioFrameCount frame = 0; frame < frames; ++frame) {
+                channels[0][frame] = samples[frame * 2] / 32768.0f;
+                channels[1][frame] = samples[frame * 2 + 1] / 32768.0f;
+            }
         }
     }
     Sound_FreeSample(sample);
@@ -702,6 +720,8 @@ static int32_t Art3m1sWindowState(void) {
     uint32_t _stageHeight;
     CFTimeInterval _lastTimestamp;
     BOOL _firstFrame;
+    uint64_t _renderAttempts;
+    uint64_t _renderedFrames;
     BOOL _paused;
     BOOL _startRequested;
     int32_t _lastDirection;
@@ -1367,7 +1387,7 @@ static int32_t Art3m1sWindowState(void) {
     _stageHeight = art3m1s_runtime_stage_height(_runtime);
     const uint32_t capacity = art3m1s_runtime_pixel_buffer_size(_runtime);
     const uint64_t expected = static_cast<uint64_t>(_stageWidth) * _stageHeight * 4;
-    if (_stageWidth == 0 || _stageHeight == 0 || expected > UINT32_MAX ||
+    if (_stageWidth == 0 || _stageHeight == 0 || expected > 256u * 1024u * 1024u ||
         capacity < expected) {
         art3m1s_runtime_destroy(_runtime);
         _runtime = nullptr;
@@ -1389,6 +1409,20 @@ static int32_t Art3m1sWindowState(void) {
 
 - (void)drawFrame:(CADisplayLink *)link {
     if (_runtime == nullptr || _paused) return;
+    const uint32_t width = art3m1s_runtime_stage_width(_runtime);
+    const uint32_t height = art3m1s_runtime_stage_height(_runtime);
+    const uint64_t byteCount = static_cast<uint64_t>(width) * height * 4;
+    if (width == 0 || height == 0 || byteCount > 256u * 1024u * 1024u) {
+        _displayLink.paused = YES;
+        Emit(_session, YUME_RUNTIME_EVENT_FAILED, "artemis.invalid-frame-size");
+        return;
+    }
+    if (_stageWidth != width || _stageHeight != height) {
+        _stageWidth = width;
+        _stageHeight = height;
+        _pixels.resize(static_cast<size_t>(byteCount));
+        AppendLog(_session, YUME_RUNTIME_LOG_INFORMATION, "frame.stage-resized");
+    }
     [self updateLayerVideoFramesAtHostTime:link.timestamp];
     uint32_t delta = _lastTimestamp > 0
         ? static_cast<uint32_t>(std::clamp((link.timestamp - _lastTimestamp) * 1000.0, 1.0, 100.0))
@@ -1397,6 +1431,7 @@ static int32_t Art3m1sWindowState(void) {
     const uint32_t written = art3m1s_runtime_advance_and_render(
         _runtime, delta, _pixels.data(), static_cast<uint32_t>(_pixels.size()));
     const uint64_t expected = static_cast<uint64_t>(_stageWidth) * _stageHeight * 4;
+    ++_renderAttempts;
     if (expected <= _pixels.size() && written >= expected) {
         NSData *data = [NSData dataWithBytes:_pixels.data()
                                       length:static_cast<NSUInteger>(expected)];
@@ -1406,20 +1441,32 @@ static int32_t Art3m1sWindowState(void) {
             _stageWidth * 4, colorSpace,
             kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast,
             provider, nullptr, false, kCGRenderingIntentDefault);
-        if (image != nullptr) self.layer.contents = (__bridge id)image;
-        if (image != nullptr) CGImageRelease(image);
+        const bool presented = image != nullptr;
+        if (presented) self.layer.contents = (__bridge id)image;
+        if (presented) CGImageRelease(image);
         CGColorSpaceRelease(colorSpace);
         CGDataProviderRelease(provider);
-        if (!_firstFrame) {
+        if (presented) ++_renderedFrames;
+        if (presented && !_firstFrame) {
             _firstFrame = YES;
+            NSString *summary = [NSString stringWithFormat:@"frame.first size=%ux%u bytes=%u", _stageWidth, _stageHeight, written];
+            AppendLog(_session, YUME_RUNTIME_LOG_INFORMATION, summary.UTF8String);
             Emit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "artemis.first-frame");
         }
+    }
+    if (_renderAttempts % 120u == 0u) {
+        NSString *summary = [NSString stringWithFormat:@"frame.stats attempts=%llu presented=%llu written=%u expected=%llu",
+            static_cast<unsigned long long>(_renderAttempts),
+            static_cast<unsigned long long>(_renderedFrames), written,
+            static_cast<unsigned long long>(expected)];
+        AppendLog(_session, written < expected ? YUME_RUNTIME_LOG_WARNING : YUME_RUNTIME_LOG_INFORMATION,
+                  summary.UTF8String);
     }
     if (art3m1s_runtime_is_exit_requested(_runtime) != 0) [self stopEngine];
 }
 
 - (CGPoint)stagePointForViewPoint:(CGPoint)point {
-    if (_stageWidth == 0 || _stageHeight == 0) return CGPointZero;
+    if (_stageWidth == 0 || _stageHeight == 0 || CGRectIsEmpty(self.bounds)) return CGPointZero;
     const CGFloat scale = MIN(self.bounds.size.width / _stageWidth,
                               self.bounds.size.height / _stageHeight);
     const CGFloat width = _stageWidth * scale;
@@ -1619,6 +1666,12 @@ static int32_t Art3m1sWindowState(void) {
 
 - (int32_t)pauseEngine {
     if (_runtime == nullptr || _paused) return -1;
+    // End touches when leaving the foreground; UIKit may never deliver
+    // touchesEnded for fingers held while the scene is suspended.
+    for (const auto &entry : _touchIdentifiers)
+        art3m1s_runtime_feed_touch(_runtime, entry.second, 2, 0, 0);
+    _touchIdentifiers.clear();
+    art3m1s_runtime_feed_mouse_button(_runtime, 0, 0);
     _paused = YES;
     _displayLink.paused = YES;
     [_audioEngine pause];

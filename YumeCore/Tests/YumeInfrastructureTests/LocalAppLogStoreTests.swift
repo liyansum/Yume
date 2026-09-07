@@ -3,6 +3,40 @@ import XCTest
 @testable import YumeInfrastructure
 
 final class LocalAppLogStoreTests: XCTestCase {
+    func testExportBoundsPayloadKeepsNewestTailsAndLabelsGames() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalAppLogStore(directoryURL: root.appendingPathComponent("AppLogs"))
+        var files: [URL] = []
+        for index in 0..<9 {
+            let file = root.appendingPathComponent("Games/game-\(index)/logs/engine.log")
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("HEAD-SHOULD-BE-TRUNCATED".utf8).write(to: file)
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.truncate(atOffset: 9 * 1_024 * 1_024)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("TAIL-\(index)".utf8))
+            try handle.close()
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(1000 - index))], ofItemAtPath: file.path)
+            files.append(file)
+        }
+        let link = root.appendingPathComponent("linked.log")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: files[0])
+        let export = try await store.makeExport(additionalLogFiles: files + [files[0], link])
+        let data = try Data(contentsOf: export)
+        XCTAssertGreaterThan(data.count, 64 * 1_024 * 1_024)
+        XCTAssertLessThan(data.count, 64 * 1_024 * 1_024 + 16_384)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("HEAD-SHOULD-BE-TRUNCATED"))
+        XCTAssertFalse(text.contains("TAIL-8"))
+        XCTAssertFalse(text.contains("linked.log"))
+        XCTAssertTrue(text.contains("Export limit reached"))
+        for index in 0..<8 {
+            XCTAssertTrue(text.contains("TAIL-\(index)"))
+            XCTAssertEqual(text.components(separatedBy: "/Games/game-\(index)/logs/engine.log").count, 2)
+        }
+    }
+
     func testStartsDurableSessionAndExportsAdditionalRuntimeLog() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "Yume-AppLogTests-\(UUID().uuidString)",

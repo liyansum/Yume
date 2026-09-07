@@ -17,7 +17,9 @@
       warnOnUnsupportedContent: true,
       contextMenu: "off",
       openUrlMode: "deny",
-      allowNetworking: "none"
+      // Local loading and SharedObject stay available; the host blocks all
+      // requests outside this session's loopback origin.
+      allowNetworking: "internal"
     };
   </script>
   <script src="ruffle.js"></script>
@@ -30,11 +32,24 @@
       if (!movie) throw new Error("Missing movie URL");
       const player = window.RufflePlayer.newest().createPlayer();
       document.getElementById("player").appendChild(player);
+      player.tabIndex = 0;
+      player.focus();
       player.ruffle().load({
         url: movie,
+        base: new URL(".", movie).href,
         autoplay: "on",
         allowScriptAccess: false,
         parameters: ""
+      }).then(() => {
+        console.info("yume.ruffle.movie-loaded", movie);
+        window.webkit?.messageHandlers?.yumeDiagnostics?.postMessage({
+          kind: "runtime-ready", message: "Ruffle movie loaded"
+        });
+      }).catch(error => {
+        console.error("yume.ruffle.load-failed", error);
+        window.webkit?.messageHandlers?.yumeDiagnostics?.postMessage({
+          kind: "runtime-failed", message: String(error), stack: error?.stack || ""
+        });
       });
     })();
   </script>

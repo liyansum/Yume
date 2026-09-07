@@ -65,13 +65,12 @@ struct RootView: View {
                 onResume: { model.resumePlayback() },
                 onClose: { Task { await model.stopPlaying() } },
                 onLog: { message, isError, metadata in
-                    Task {
-                        await model.recordPlayerLog(
-                            message,
-                            isError: isError,
-                            metadata: metadata
-                        )
-                    }
+                    model.recordPlayerLog(
+                        message,
+                        sessionID: session.id,
+                        isError: isError,
+                        metadata: metadata
+                    )
                 }
             )
         }

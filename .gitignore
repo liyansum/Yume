@@ -29,6 +29,8 @@ xcuserdata/
 /Application Support/
 
 # Editor and temporary files
+__pycache__/
+*.pyc
 .idea/
 .vscode/
 *.swp

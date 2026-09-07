@@ -145,7 +145,9 @@ static void MirrorRenPyPythonLog(RenPySession *session) {
         NSFileHandle *handle = [NSFileHandle fileHandleForReadingAtPath:path];
         if (handle == nil) return;
         [handle seekToFileOffset:session->pythonLogOffset];
-        NSData *data = [handle readDataToEndOfFile];
+        // Bound each poll even when a game floods stdout. Remaining bytes
+        // are mirrored by subsequent polls and retained in the original log.
+        NSData *data = [handle readDataOfLength:64 * 1024];
         session->pythonLogOffset += data.length;
         [handle closeFile];
         if (data.length == 0) return;
@@ -461,6 +463,7 @@ static UIWindow *FindSDLUIKitWindow(void) {
     __weak UIView *_embeddedGameView;
     __weak UIWindow *_sdlWindow;
     BOOL _sdlStarted;
+    BOOL _firstFrameSent;
     uint64_t _embeddingPollCount;
     CFTimeInterval _lastEmbeddingDiagnostic;
 }
@@ -644,6 +647,16 @@ static UIWindow *FindSDLUIKitWindow(void) {
                       SDL_GetError() ?: "<none>");
         AppendRenPyHostLog(_session, line);
     }
+    if (!_firstFrameSent && _session != nullptr &&
+        (_embeddedGameView != nil || self.subviews.count > 0)) {
+        NSString *marker = [[NSString stringWithUTF8String:_session->logRoot.c_str()]
+            stringByAppendingPathComponent:@"renpy-first-frame.txt"];
+        if ([NSFileManager.defaultManager fileExistsAtPath:marker]) {
+            _firstFrameSent = YES;
+            AppendRenPyHostLog(_session, "frame.first-render-submitted-and-view-attached");
+            RenPyEmit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "renpy.first-frame");
+        }
+    }
     if (_embeddedGameView != nil) {
         _embeddedGameView.frame = self.bounds;
         return;
@@ -653,9 +666,8 @@ static UIWindow *FindSDLUIKitWindow(void) {
     UIView *gameView = window.rootViewController.view;
     if (gameView == nil) return;
     if (window == self.window && gameView == window.rootViewController.view) {
-        AppendRenPyHostLog(_session, "view.embed-skip-host-window");
-        link.paused = YES;
-        RenPyEmit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "renpy.first-frame");
+        if (_embeddingPollCount == 1 || _embeddingPollCount % 120u == 0u)
+            AppendRenPyHostLog(_session, "view.host-window awaiting-render-marker");
         return;
     }
     [gameView removeFromSuperview];
@@ -670,9 +682,7 @@ static UIWindow *FindSDLUIKitWindow(void) {
     if (self.window != nil) [self.window makeKeyAndVisible];
     _embeddedGameView = gameView;
     _sdlWindow = window;
-    link.paused = YES;
-    AppendRenPyHostLog(_session, "view.embedded first-frame");
-    RenPyEmit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "renpy.first-frame");
+    AppendRenPyHostLog(_session, "view.embedded awaiting-render-marker");
 }
 
 - (void)layoutSubviews {
@@ -712,7 +722,7 @@ static int32_t RenPyCreate(const YumeRuntimeConfiguration *configuration,
         configuration->networking_allowed != 0) return -1;
     {
         std::lock_guard<std::mutex> lock(gRenPyClaimMutex);
-        if (gRenPyClaimed) return -10;
+        if (gRenPyClaimed) return YUME_RUNTIME_ERROR_RESTART_REQUIRED;
         gRenPyClaimed = true;
     }
     auto *session = new (std::nothrow) RenPySession();
@@ -824,6 +834,8 @@ static int32_t RenPyStart(void *opaque) {
     // for python home at dirname(argv[0])/base.
     session->runtimeBasePath = generationRoot.UTF8String ?: "";
     session->launcherPath = [generationRoot stringByAppendingPathComponent:@"main"].UTF8String;
+    NSString *marker = [logRoot stringByAppendingPathComponent:@"renpy-first-frame.txt"];
+    [fileManager removeItemAtPath:marker error:nil];
     [session->view beginEmbedding];
     RenPyEmit(session, YUME_RUNTIME_EVENT_STARTED,
               session->generation == RenPyGeneration::Modern

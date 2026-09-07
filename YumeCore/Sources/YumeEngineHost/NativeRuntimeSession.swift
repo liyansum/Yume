@@ -52,6 +52,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         runtimeIdentifier.withCString { yume_runtime_is_available($0) != 0 }
     }
 
+    @MainActor
     public init(
         runtimeIdentifier: String,
         game: PreparedGame,
@@ -61,7 +62,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         self.runtimeIdentifier = runtimeIdentifier
         self.stopTimeout = max(0, stopTimeout)
         let pair = AsyncStream<EngineEvent>.makeStream()
-        let logPair = AsyncStream<NativeRuntimeLogRecord>.makeStream()
+        let logPair = AsyncStream<NativeRuntimeLogRecord>.makeStream(bufferingPolicy: .bufferingNewest(512))
         events = pair.stream
         logs = logPair.stream
         sink = NativeRuntimeEventSink(
@@ -71,6 +72,10 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         callbackContext = Unmanaged.passRetained(sink).toOpaque()
 
         if let gateError = NativeRuntimeProcessGate.claim() {
+            // All stored properties are initialized, so throwing now also
+            // invokes deinit. Mark this cleanup complete before releasing
+            // the retained callback sink, otherwise deinit releases it twice.
+            destroyed = true
             sink.finish()
             Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
             throw gateError
@@ -80,6 +85,10 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         guard Self.isAvailable(runtimeIdentifier: runtimeIdentifier) else {
             ownsProcessGate = false
             NativeRuntimeProcessGate.release(cleanShutdown: true)
+            // All stored properties are initialized, so throwing now also
+            // invokes deinit. Mark this cleanup complete before releasing
+            // the retained callback sink, otherwise deinit releases it twice.
+            destroyed = true
             sink.finish()
             Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
             throw NativeRuntimeHostError.unavailable(runtimeIdentifier)
@@ -104,8 +113,15 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         guard handle != nil else {
             ownsProcessGate = false
             NativeRuntimeProcessGate.release(cleanShutdown: true)
+            // All stored properties are initialized, so throwing now also
+            // invokes deinit. Mark this cleanup complete before releasing
+            // the retained callback sink, otherwise deinit releases it twice.
+            destroyed = true
             sink.finish()
             Unmanaged<NativeRuntimeEventSink>.fromOpaque(callbackContext).release()
+            if creationError == YUME_RUNTIME_ERROR_RESTART_REQUIRED {
+                throw NativeRuntimeHostError.processRequiresRestart
+            }
             throw NativeRuntimeHostError.creationFailed(
                 runtimeIdentifier: runtimeIdentifier,
                 code: creationError
@@ -122,6 +138,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         destroy(cleanShutdown: !started || sink.hasStopped)
     }
 
+    @MainActor
     public func start() async throws {
         let result = beginStart()
         guard result == 0 else {
@@ -129,14 +146,17 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         }
     }
 
+    @MainActor
     public func pause() async {
         _ = withHandle { yume_runtime_session_pause($0) }
     }
 
+    @MainActor
     public func resume() async {
         _ = withHandle { yume_runtime_session_resume($0) }
     }
 
+    @MainActor
     public func send(_ input: EngineInputEvent) async {
         switch input {
         case let .button(action, pressed):
@@ -155,6 +175,7 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
         }
     }
 
+    @MainActor
     public func stop() async {
         guard let (wasStarted, result) = beginStop() else { return }
 
@@ -212,6 +233,15 @@ public final class NativeRuntimeSession: EnginePlayer, @unchecked Sendable {
     }
 
     private func destroy(cleanShutdown: Bool) {
+#if canImport(UIKit)
+        // deinit can run on any executor. Providers detach UIKit views and
+        // restore process globals here; serialize those operations with start,
+        // input and stop even when an owner drops a session without awaiting it.
+        if !Thread.isMainThread {
+            DispatchQueue.main.sync { self.destroy(cleanShutdown: cleanShutdown) }
+            return
+        }
+#endif
         lock.lock()
         guard !destroyed else {
             lock.unlock()

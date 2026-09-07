@@ -73,6 +73,8 @@ require_symbol() {
 
 require_symbol "$aether_lib/libYumeAetherKiri.a" engine_create
 require_symbol "$aether_lib/libYumeAetherKiri.a" engine_open_game_async
+require_symbol "$aether_lib/libYumeAetherKiri.a" engine_begin_shutdown
+require_symbol "$aether_lib/libYumeAetherKiri.a" engine_poll_shutdown
 require_symbol "$engine_lib/libmkxpz-core.a" SDL_main
 require_symbol "$engine_lib/libmkxpz-core.a" mkxp_resetSessionState
 require_symbol "$engine_lib/libmkxpz-core.a" mkxp_getSDLUIKitWindow
@@ -85,6 +87,7 @@ require_symbol "$mkxp_lib/mkxp18-merged.o" mkxp_get_script_binding_18
 require_symbol "$mkxp_lib/mkxp19-merged.o" mkxp_get_script_binding_19
 require_symbol "$mkxp_lib/mkxp31-merged.o" mkxp_get_script_binding_31
 require_symbol "$mkxp_lib/libSDL2.a" SDL_SetMainReady
+require_symbol "$mkxp_lib/libSDL2.a" SDL_ResetHint
 require_symbol "$mkxp_lib/libSDL2.a" SDL_PushEvent
 require_symbol "$mkxp_lib/libSDL2.a" SDL_GetKeyboardFocus
 require_symbol "$mkxp_lib/libSDL2.a" SDL_GetWindowFromID

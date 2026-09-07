@@ -87,7 +87,8 @@
 "player.error.title" = "ゲームを開始できません";
 "player.error.message" = "インストール済みランタイムに、このゲームを実行できるエントリポイントがありません。";
 "player.loadFailure.title" = "ゲームを読み込めませんでした";
-"player.loadFailure.message" = "必要なリソースを読み込めなかったため、ローカルプレイヤーを停止しました。";
+"player.loadFailure.message" = "ゲームを開始または続行できませんでした。プレイヤーを閉じ、設定から診断をエクスポートして原因を確認してください。";
+"player.restartRequired.message" = "この実行環境では、次のセッションを安全に開始できません。Yume を完全に終了してから開き直してください。繰り返す場合は、設定から診断をエクスポートしてください。";
 "game.saves.title" = "セーブデータ";
 "game.saves.export" = "セーブを書き出す準備";
 "game.saves.share" = "セーブパッケージを共有";

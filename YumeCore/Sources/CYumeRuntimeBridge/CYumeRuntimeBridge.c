@@ -73,6 +73,10 @@ YumeRuntimeSession *yume_runtime_session_create(
     session->api = api;
     int32_t result = api->create(configuration, callback, callback_context, &session->provider_session);
     if (result != 0 || !session->provider_session) {
+        // A provider may allocate its owner before a later setup step fails.
+        // Release it while callback_context is still valid; Swift has no
+        // handle with which to clean up a rejected creation.
+        if (session->provider_session) api->destroy(session->provider_session);
         free(session);
         if (error_code) *error_code = result ? result : -4;
         return NULL;

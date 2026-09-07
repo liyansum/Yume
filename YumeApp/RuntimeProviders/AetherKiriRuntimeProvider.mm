@@ -44,6 +44,8 @@ static void Emit(AetherSession *session, YumeRuntimeEventKind kind,
 - (int32_t)sendText:(const char *)text;
 - (int32_t)sendPointerX:(double)x y:(double)y pressed:(BOOL)pressed;
 - (int32_t)stopEngine;
+- (void)pollProviderShutdown;
+- (void)finishEngineStop;
 - (void)drainEngineLogs;
 - (void)detachSession;
 @end
@@ -62,6 +64,9 @@ struct AetherSession {
     __strong YumeAetherRuntimeView *view = nil;
     std::atomic<bool> stopped{false};
     std::mutex log_mutex;
+    // ONS overrides SDL's process-global video driver to dummy. Restore
+    // these hints before a later RGSS/Ren'Py session needs a real surface.
+    struct SavedHint { std::string name; std::string value; bool existed; };
     bool savedata_environment_captured = false;
     bool savedata_environment_existed = false;
     std::string savedata_environment_value;
@@ -177,6 +182,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 @implementation YumeAetherRuntimeView {
     AetherSession *_session;
+    std::vector<AetherSession::SavedHint> _savedSDLHints;
     engine_handle_t _engine;
     CADisplayLink *_displayLink;
     std::atomic<bool> _workerStopped;
@@ -202,6 +208,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     BOOL _engineStarting;
     BOOL _startFailed;
     BOOL _paused;
+    BOOL _pauseRequested;
     BOOL _stopped;
 }
 
@@ -291,6 +298,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (int32_t)startEngineIfAttached {
     if (!_startRequested || _stopped || _session == nullptr) return 0;
+    if (_pauseRequested) return 0;
     if (_engine != nullptr || _engineStarting) return 0;
     if (_startFailed) return -2;
     if (self.window == nil || CGRectIsEmpty(self.bounds)) return 0;
@@ -326,6 +334,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     SDL_iPhoneSetEventPump(SDL_TRUE);
     AppendHostLog(_session, "start.sdl-ready");
     if (_session->kind == AetherRuntimeKind::ONScripter) {
+        for (const char *name : {SDL_HINT_VIDEODRIVER, SDL_HINT_RENDER_DRIVER, SDL_HINT_AUDIODRIVER}) {
+            const char *value = SDL_GetHint(name);
+            _savedSDLHints.push_back({name, value != nullptr ? value : "", value != nullptr});
+        }
         aetherkiri::onscripter::RegisterRuntimeProvider();
     }
 
@@ -387,7 +399,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     } else {
         AppendHostLog(_session, "start.default-font missing");
     }
-    if (!_session->save_root.empty()) {
+    if (_session->kind == AetherRuntimeKind::Kirikiri && !_session->save_root.empty()) {
         const char *previous = std::getenv("YUME_KIRIKIRI_SAVEDATA");
         _session->savedata_environment_captured = true;
         _session->savedata_environment_existed = previous != nullptr;
@@ -396,12 +408,15 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         AppendHostLog(_session, "start.savedata=" + _session->save_root);
     }
 
-    // Open synchronously on the engine-create thread. engine_open_game_async
-    // spawns an internal worker, which races DisplayLink ticks and UIKit/TVP
-    // thread-local state (LiveContainer crash after the datapath log).
+    // Kirikiri requires TVP's creator thread. ONS open_game waits for its
+    // interpreter thread (including script parsing and archive/font IO), so
+    // use the provider's async-open path and poll startup before ticking it.
+    // Keeping that wait on UIKit defeats both input and the startup watchdog.
     AppendHostLog(_session, "start.open-game.begin");
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.open-game-begin"];
-    result = engine_open_game(_engine, _session->content_root.c_str(), nullptr);
+    result = _session->kind == AetherRuntimeKind::ONScripter
+        ? engine_open_game_async(_engine, _session->content_root.c_str(), nullptr)
+        : engine_open_game(_engine, _session->content_root.c_str(), nullptr);
     if (result != ENGINE_RESULT_OK) {
         AppendEngineError(_session, _engine, "start.open-game.failed");
         [self drainEngineLogs];
@@ -410,7 +425,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         _engine = nullptr;
         return static_cast<int32_t>(result);
     }
-    AppendHostLog(_session, "start.open-game.ok");
+    AppendHostLog(_session, _session->kind == AetherRuntimeKind::ONScripter
+        ? "start.open-game.scheduled" : "start.open-game.ok");
     [self emitOnMain:YUME_RUNTIME_EVENT_WARNING code:"aether.stage.open-game-ok"];
     [self drainEngineLogs];
     [self emitOnMain:YUME_RUNTIME_EVENT_STARTED code:"aether.started"];
@@ -458,6 +474,10 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     if (startupState != ENGINE_STARTUP_STATE_SUCCEEDED) return;
     if (!_startupResolved) AppendHostLog(_session, "frame.startup.succeeded");
     _startupResolved = YES;
+    if (_pauseRequested) {
+        (void)[self pauseEngine];
+        return;
+    }
 
     const CFTimeInterval delta = _lastTimestamp > 0
         ? std::clamp(timestamp - _lastTimestamp, 0.001, 0.100)
@@ -479,7 +499,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     frame.struct_size = sizeof(frame);
     const engine_result_t descriptorResult = engine_get_frame_desc(_engine, &frame);
     if (descriptorResult != ENGINE_RESULT_OK ||
-        frame.width == 0 || frame.height == 0 || frame.stride_bytes < frame.width * 4u ||
+        frame.width == 0 || frame.height == 0 || frame.width > 16384 || frame.height > 16384 ||
+        frame.stride_bytes < static_cast<uint64_t>(frame.width) * 4u ||
+        static_cast<uint64_t>(frame.stride_bytes) * frame.height > 256u * 1024u * 1024u ||
         frame.pixel_format != ENGINE_PIXEL_FORMAT_RGBA8888 ||
         frame.frame_serial == _lastFrameSerial) {
         if (_tickCount <= 3 || _tickCount % 300u == 0u) {
@@ -584,7 +606,11 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (int32_t)pauseEngine {
     if (_stopped || _workerStopped.load()) return -1;
+    _pauseRequested = YES;
     if (_paused) return 0;
+    // Async ONS startup cannot accept engine_pause yet. Remember the intent
+    // and apply it as soon as startup resolves, before the first host tick.
+    if (_engine == nullptr || !_startupResolved) return 0;
     __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
     [self runOnEngineThread:^{
         if (_engine != nullptr && !_workerStopped.load()) {
@@ -602,7 +628,8 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
 
 - (int32_t)resumeEngine {
     if (_stopped || _workerStopped.load()) return -1;
-    if (!_paused) return 0;
+    _pauseRequested = NO;
+    if (!_paused) return [self startEngineIfAttached];
     __block engine_result_t result = ENGINE_RESULT_INVALID_STATE;
     [self runOnEngineThread:^{
         if (_engine != nullptr && !_workerStopped.load()) {
@@ -685,8 +712,9 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     const CGSize viewSize = self.bounds.size;
     CGPoint point = [self enginePointForViewPoint:viewPoint viewSize:viewSize];
     const int32_t pointerID = 0;
-    const uint32_t type = pressed ? ENGINE_INPUT_EVENT_POINTER_DOWN
-                                  : ENGINE_INPUT_EVENT_POINTER_UP;
+    const uint32_t type = pressed
+        ? (_activeTouchPoints.count(pointerID) ? ENGINE_INPUT_EVENT_POINTER_MOVE : ENGINE_INPUT_EVENT_POINTER_DOWN)
+        : ENGINE_INPUT_EVENT_POINTER_UP;
     double deltaX = 0;
     double deltaY = 0;
     const auto previous = _activeTouchPoints.find(pointerID);
@@ -703,7 +731,7 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         if (_engine == nullptr || !_startupResolved || _workerStopped.load()) return;
         engine_input_event_t event{};
         event.struct_size = sizeof(event);
-        event.type = pressed ? ENGINE_INPUT_EVENT_POINTER_DOWN : ENGINE_INPUT_EVENT_POINTER_UP;
+        event.type = type;
         event.timestamp_micros = static_cast<uint64_t>(CACurrentMediaTime() * 1000000.0);
         event.x = point.x;
         event.y = point.y;
@@ -804,6 +832,39 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     [_displayLink invalidate];
     _displayLink = nil;
     self.layer.contents = nil;
+    _workerStopped.store(true);
+    _activeTouchPoints.clear();
+    _touchPointerIDs.clear();
+    if (_engine != nullptr && _session != nullptr &&
+        _session->kind == AetherRuntimeKind::ONScripter) {
+        [self drainEngineLogs];
+        const auto result = engine_begin_shutdown(_engine);
+        if (result == ENGINE_RESULT_OK) {
+            AppendHostLog(_session, "stop.provider-shutdown.scheduled");
+            [self pollProviderShutdown];
+            return 0;
+        }
+        AppendHostLog(_session, "stop.provider-shutdown.failed result=" + std::to_string(result));
+    }
+    [self finishEngineStop];
+    return 0;
+}
+
+- (void)pollProviderShutdown {
+    if (_engine == nullptr) return;
+    uint32_t complete = 0;
+    const auto result = engine_poll_shutdown(_engine, &complete);
+    if (result == ENGINE_RESULT_OK && complete != 0) {
+        [self finishEngineStop];
+        return;
+    }
+    // The block keeps the view/engine owner alive even if the Swift session
+    // times out and detaches. Never free an interpreter that is still running.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{ [self pollProviderShutdown]; });
+}
+
+- (void)finishEngineStop {
     [self runOnEngineThread:^{
         if (_engine != nullptr) {
             [self drainEngineLogs];
@@ -817,6 +878,11 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
     _activeTouchPoints.clear();
     _touchPointerIDs.clear();
     SDL_iPhoneSetEventPump(SDL_FALSE);
+    for (const auto &hint : _savedSDLHints) {
+        SDL_ResetHint(hint.name.c_str());
+        if (hint.existed) SDL_SetHint(hint.name.c_str(), hint.value.c_str());
+    }
+    _savedSDLHints.clear();
     if (_session != nullptr) {
         if (_session->savedata_environment_captured) {
             if (_session->savedata_environment_existed) {
@@ -832,7 +898,6 @@ static engine_result_t SetOption(engine_handle_t handle, const char *key,
         _session->stopped.store(true);
         [self emitOnMain:YUME_RUNTIME_EVENT_STOPPED code:"aether.stopped"];
     }
-    return 0;
 }
 
 - (void)detachSession { _session = nullptr; }

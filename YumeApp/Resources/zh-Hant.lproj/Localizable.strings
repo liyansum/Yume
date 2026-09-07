@@ -87,7 +87,8 @@
 "player.error.title" = "無法啟動遊戲";
 "player.error.message" = "已安裝的執行階段無法為此遊戲提供可執行的入口。";
 "player.loadFailure.title" = "遊戲載入失敗";
-"player.loadFailure.message" = "由於必要資源無法載入，Yume 已停止本機播放器。";
+"player.loadFailure.message" = "Yume 無法啟動或繼續執行此遊戲。請關閉播放器，在「設定」中匯出診斷以查看具體原因。";
+"player.restartRequired.message" = "目前執行環境無法安全啟動新的工作階段。請完全結束 Yume 並重新開啟後再試；若反覆出現，請在「設定」中匯出診斷。";
 "game.saves.title" = "存檔資料";
 "game.saves.export" = "準備匯出存檔";
 "game.saves.share" = "分享存檔包";

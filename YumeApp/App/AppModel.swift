@@ -96,6 +96,8 @@ final class AppModel {
     private(set) var rtpPackages: [RTPPackage] = []
     private(set) var saveLibraries: [GameSaveLibrary] = []
     private var hasStartedAppLog = false
+    private var runtimeJournals: [UUID: RuntimeSessionJournal] = [:]
+    private var isPreparingPlayback = false
 
     private static let appLogAutoCleanupKey = "diagnostics.appLogs.autoCleanup7Days"
 
@@ -479,6 +481,9 @@ final class AppModel {
     }
 
     func launch(_ game: ImportedGame) async {
+        guard !isPreparingPlayback, activeSession == nil else { return }
+        isPreparingPlayback = true
+        defer { isPreparingPlayback = false }
         playbackFailed = false
         GameRuntimePreferences.applyLaunchEnvironment(for: game)
         await recordAppLog(
@@ -493,6 +498,24 @@ final class AppModel {
         do {
             let session = try await playSessions.start(gameID: game.id)
             prepareRuntimeLogsForNewSession(at: session.content.logRootURL)
+            let journal = try RuntimeSessionJournal(
+                directoryURL: session.content.logRootURL,
+                sessionID: session.id,
+                metadata: appLogSessionMetadata.merging([
+                    "gameID": game.id.rawValue.uuidString,
+                    "engine": game.engine.id.rawValue,
+                    "runtime": runtimeIdentifier(for: session.launchPlan.kind),
+                    "runtimeVersion": session.launchPlan.runtimeVersionLabel,
+                    "entryPoint": session.content.runtimeEntryPoint?.rawValue
+                        ?? session.content.webEntryPoint?.rawValue ?? "engine-detected",
+                    "contentRoot": Self.containerRelativePath(session.content.rootURL),
+                    "saveRoot": Self.containerRelativePath(session.content.saveRootURL),
+                    "rtpMountCount": String(session.rtpMountRoots.count)
+                ]) { _, new in new }
+            )
+            runtimeJournals[session.id] = journal
+            journal.startMonitoring()
+            isPlaybackSuspended = false
             activeSession = session
             await recordAppLog(
                 subsystem: "player",
@@ -510,6 +533,7 @@ final class AppModel {
                 ]
             )
         } catch {
+            _ = await playSessions.stop()
             playbackFailed = true
             await recordAppLog(
                 level: .error,
@@ -528,10 +552,12 @@ final class AppModel {
     }
 
     func suspendPlayback() {
+        if let id = activeSession?.id { runtimeJournals[id]?.setSuspended(true) }
         isPlaybackSuspended = true
     }
 
     func resumePlayback() {
+        if let id = activeSession?.id { runtimeJournals[id]?.setSuspended(false) }
         isPlaybackSuspended = false
     }
 
@@ -748,7 +774,8 @@ final class AppModel {
     }
 
     func prepareDiagnosticExport() async {
-        diagnosticExportURL = try? await diagnostics.makeExport()
+        await prepareAppLogExport()
+        diagnosticExportURL = appLogExportURL
     }
 
     func startAppLoggingIfNeeded() async {
@@ -774,15 +801,31 @@ final class AppModel {
 
     func recordPlayerLog(
         _ message: String,
+        sessionID: UUID,
         isError: Bool = false,
         metadata: [String: String] = [:]
-    ) async {
-        await recordAppLog(
-            level: isError ? .error : .information,
-            subsystem: "runtime",
-            message: message,
-            metadata: metadata
-        )
+    ) {
+        var values = metadata
+        values["sessionID"] = sessionID.uuidString
+        // This completes before returning to the provider. A Task-only log
+        // loses the last launch stage if the next C call blocks or aborts.
+        do {
+            try runtimeJournals[sessionID]?.record(message, isError: isError, metadata: values)
+        } catch {
+            values["journalWriteError"] = String(describing: error)
+        }
+        if message == "native.released" || message == "web.stopped" {
+            runtimeJournals.removeValue(forKey: sessionID)
+        }
+        let recordedValues = values
+        Task {
+            await recordAppLog(
+                level: isError ? .error : .information,
+                subsystem: "runtime",
+                message: message,
+                metadata: recordedValues
+            )
+        }
     }
 
     func recordAppEvent(
@@ -907,9 +950,16 @@ final class AppModel {
                     && (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
             })
         }
-        appLogExportURL = try? await appLogStore.makeExport(
-            additionalLogFiles: runtimeLogs
-        )
+        if let structuredExport = try? await diagnostics.makeExport() {
+            runtimeLogs.insert(structuredExport, at: 0)
+        }
+        do {
+            appLogExportURL = try await appLogStore.makeExport(additionalLogFiles: runtimeLogs)
+        } catch {
+            appLogExportURL = nil
+            await recordAppLog(level: .error, subsystem: "diagnostics",
+                               message: "export.failed", metadata: ["error": String(describing: error)])
+        }
     }
 
     private func recordAppLog(
@@ -969,7 +1019,19 @@ final class AppModel {
                     options: [.skipsHiddenFiles]
                   )
             else { continue }
-            for file in files where file.lastPathComponent.hasSuffix("-crash.log") {
+            for report in (try? RuntimeSessionJournal.recoverInterrupted(in: content.logRootURL)) ?? [] {
+                await recordAppLog(level: .warning, subsystem: "runtime-recovery",
+                    message: "previous-session-interrupted", metadata: [
+                        "sessionID": report.sessionID.uuidString,
+                        "gameID": game.id.rawValue.uuidString,
+                        "engine": game.engine.id.rawValue,
+                        "lastEvent": report.lastEvent,
+                        "lastError": report.lastError ?? "none",
+                        "firstFrame": report.firstFrameAt == nil ? "false" : "true",
+                        "cause": "unknown: force quit, OS termination or native crash; inspect session and engine logs"
+                    ])
+            }
+            for file in files where !file.lastPathComponent.hasPrefix("session-") && file.lastPathComponent.hasSuffix("-crash.log") {
                 guard let values = try? file.resourceValues(
                     forKeys: [.isRegularFileKey, .fileSizeKey]
                 ), values.isRegularFile == true, (values.fileSize ?? 0) > 0
@@ -1027,6 +1089,8 @@ final class AppModel {
             "appVersion": Bundle.main.object(
                 forInfoDictionaryKey: "CFBundleShortVersionString"
             ) as? String ?? "unknown",
+            "sourceRevision": Bundle.main.object(forInfoDictionaryKey: "YumeSourceRevision") as? String ?? "local-unrecorded",
+            "device": Self.deviceModel,
             "build": Bundle.main.object(
                 forInfoDictionaryKey: "CFBundleVersion"
             ) as? String ?? "unknown",
@@ -1037,6 +1101,14 @@ final class AppModel {
             "processorCount": String(ProcessInfo.processInfo.processorCount),
             "process": ProcessInfo.processInfo.processName
         ]
+    }
+
+    private static var deviceModel: String {
+        var info = utsname()
+        guard uname(&info) == 0 else { return "unknown" }
+        return withUnsafeBytes(of: &info.machine) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
     }
 
     private func runtimeIdentifier(for kind: LaunchKind) -> String {

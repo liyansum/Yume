@@ -276,7 +276,11 @@ nonisolated final class LocalGameHTTPServer: @unchecked Sendable {
             )
         } catch {
             onError(String(describing: error), requestedPath)
-            let status = (error as? ServerError) == .notFound ? 404 : 400
+            let cocoa = error as NSError
+            let missing = (error as? ServerError) == .notFound ||
+                (cocoa.domain == NSCocoaErrorDomain &&
+                    [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(cocoa.code))
+            let status = missing ? 404 : 400
             sendError(
                 status,
                 reason: status == 404 ? "Not Found" : "Bad Request",
@@ -422,10 +426,9 @@ nonisolated final class LocalGameHTTPServer: @unchecked Sendable {
         relativePath: StorageRelativePath,
         under root: URL
     ) throws -> URL {
-        let cacheKey = root.path + "\n" + relativePath.rawValue.folding(
-            options: [.caseInsensitive, .diacriticInsensitive],
-            locale: Locale(identifier: "en_US_POSIX")
-        )
+        // Exact paths win on case-sensitive iOS storage. Folding the cache
+        // key aliases distinct assets such as e.png/é.png and A.png/a.png.
+        let cacheKey = root.path + "\n" + relativePath.rawValue
         if let cached = resolvedPathCache[cacheKey] { return cached }
 
         let fileManager = FileManager.default
@@ -444,7 +447,7 @@ nonisolated final class LocalGameHTTPServer: @unchecked Sendable {
             guard let matched = children.first(where: { child in
                 child.lastPathComponent.compare(
                     component,
-                    options: [.caseInsensitive, .diacriticInsensitive],
+                    options: [.caseInsensitive],
                     locale: Locale(identifier: "en_US_POSIX")
                 ) == .orderedSame
             }) else { throw ServerError.notFound }

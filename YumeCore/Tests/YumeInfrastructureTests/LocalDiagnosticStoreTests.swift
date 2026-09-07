@@ -38,6 +38,26 @@ final class LocalDiagnosticStoreTests: XCTestCase {
         XCTAssertEqual(recent, [second, first])
         XCTAssertEqual(exported, [second, first])
     }
+    func testTruncatedCrashLineDoesNotHideOlderRotatedEvidence() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalDiagnosticStore(directoryURL: root)
+        try await store.record(DiagnosticEntry(level: .information, subsystem: "fixture", code: "older"))
+        try FileManager.default.moveItem(at: root.appendingPathComponent("yume.jsonl"),
+            to: root.appendingPathComponent("yume.1.jsonl"))
+        try await store.record(DiagnosticEntry(level: .error, subsystem: "fixture", code: "before-abort"))
+        let handle = try FileHandle(forWritingTo: root.appendingPathComponent("yume.jsonl"))
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data("{partial".utf8))
+        try handle.close()
+        let entries = try await store.recentEntries(limit: 10)
+        XCTAssertEqual(entries.map(\.code), ["before-abort", "older"])
+        try await store.record(DiagnosticEntry(level: .information, subsystem: "fixture", code: "after-recovery"))
+        let appended = try await store.recentEntries(limit: 10)
+        XCTAssertEqual(appended.map(\.code), ["after-recovery", "before-abort", "older"])
+        _ = try await store.makeExport()
+    }
+
 }
 
 extension LocalDiagnosticStoreTests: @unchecked Sendable {}

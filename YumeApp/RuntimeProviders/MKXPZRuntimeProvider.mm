@@ -364,12 +364,11 @@ static void MKXPPresentCPUFrame(const unsigned char *rgba, int width, int height
 
 static void MKXPFirstFrame(void *context) {
     auto *session = static_cast<MKXPSession *>(context);
-    AppendMKXPHostLog(session, "frame.first-frame");
+    AppendMKXPHostLog(session, "frame.engine-rendered awaiting-host-presentation");
     YumeMKXPHostView *view = session != nullptr ? session->view : nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         [view syncHostMetalLayer];
     });
-    MKXPEmit(session, YUME_RUNTIME_EVENT_FIRST_FRAME, "mkxp.first-frame");
 }
 static void MKXPPaused(void *context) {
     MKXPEmit(static_cast<MKXPSession *>(context), YUME_RUNTIME_EVENT_PAUSED,
@@ -381,9 +380,9 @@ static void MKXPResumed(void *context) {
 }
 static void MKXPTerminated(void *context) {
     auto *session = static_cast<MKXPSession *>(context);
-    if (session != nullptr && !session->stoppedEventSent.exchange(true)) {
-        MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped");
-    }
+    // The core callback precedes SDL_main's final cleanup. Releasing the
+    // shared process gate here lets the next engine overlap that cleanup.
+    AppendMKXPHostLog(session, "engine.terminated awaiting-main-return");
 }
 static void MKXPError(const char *message, void *context) {
     auto *session = static_cast<MKXPSession *>(context);
@@ -553,6 +552,7 @@ static void MKXPTextInputMode(int32_t active, void *context) {
         char line[96];
         std::snprintf(line, sizeof(line), "cpu-frame.first %dx%d", width, height);
         AppendMKXPHostLog(_session, line);
+        MKXPEmit(_session, YUME_RUNTIME_EVENT_FIRST_FRAME, "mkxp.first-frame");
     }
     if (_session != nullptr && presented % 120u == 0u) {
         char line[192];
@@ -641,6 +641,8 @@ static void MKXPTextInputMode(int32_t active, void *context) {
         session->mainReturned.store(true);
         session->running.store(false);
         [session->view detachSession];
+        if (mainResult != 0)
+            MKXPEmit(session, YUME_RUNTIME_EVENT_FAILED, "mkxp.main-failed");
         if (!session->stoppedEventSent.exchange(true)) {
             MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped");
         }
@@ -789,7 +791,7 @@ static int32_t MKXPCreate(const YumeRuntimeConfiguration *configuration,
     }
     {
         std::lock_guard<std::mutex> lock(gMKXPClaimMutex);
-        if (gMKXPClaimed) return -10;
+        if (gMKXPClaimed) return YUME_RUNTIME_ERROR_RESTART_REQUIRED;
         gMKXPClaimed = true;
     }
     auto *session = new (std::nothrow) MKXPSession();
@@ -940,6 +942,9 @@ static int32_t MKXPStop(void *opaque) {
     YumeMKXPHostView *view = session->view;
     dispatch_async(dispatch_get_main_queue(), ^{ [view dismissEngineInformation]; });
     if (!session->mainEntered.load()) {
+        // A queued launch still owns the session and global configuration.
+        // Its cancellation branch emits STOPPED after detaching the view.
+        if (session->launchScheduled.load()) return 0;
         session->running.store(false);
         if (!session->stoppedEventSent.exchange(true))
             MKXPEmit(session, YUME_RUNTIME_EVENT_STOPPED, "mkxp.stopped-before-launch");
